@@ -1,0 +1,309 @@
+// Minimal MCP server over stdio (newline-delimited JSON-RPC 2.0). No dependencies, so the plugin
+// runs straight from a git checkout with nothing to install.
+
+import fs from 'node:fs';
+import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { headlessTriage } from './claude.js';
+import { renderAdded, renderBoard, renderIdea } from './render.js';
+import { BATCH_SCHEMA, MODELS, pendingIdeas, triagePrompt } from './rubric.js';
+import { addIdeas, applyTriage, counts, FILTERS, findIdea, lane, load, pickNext, STATUSES, updateIdea } from './store.js';
+import { clip, splitIdeas } from './text.js';
+
+const ROOT = new URL('..', import.meta.url);
+const VERSION = JSON.parse(fs.readFileSync(new URL('package.json', ROOT), 'utf8')).version;
+const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+
+const INSTRUCTIONS =
+  'ideamine is the user\'s idea archive, shared by every session, project, and model. When the user tosses out an ' +
+  'idea for later ("idea: ...", "save this idea", "someday we should ..."), save it with idea_add and continue the ' +
+  'current task. Do not start building a saved idea unless the user asks.';
+
+const currentProject = () => process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+const MODEL_ENUM = MODELS.map((m) => m.alias);
+
+const TOOLS = [
+  {
+    name: 'idea_add',
+    description:
+      'Save an idea to the ideamine archive. Use when the user shares an idea to keep for later. Only save it: ' +
+      'do not plan or build it, and continue what you were doing. A bulleted list becomes one idea per bullet.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The idea, verbatim.' },
+        tags: { type: 'array', items: { type: 'string' } },
+        project: { type: 'string', description: 'Project directory the idea belongs to. Default: current project.' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    annotations: { title: 'Save idea', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'idea_list',
+    description: 'Show the idea board, or one idea in full when id is given.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Show this idea in full.' },
+        filter: { type: 'string', enum: FILTERS, description: 'Default: open (doing, do, maybe, inbox).' },
+        query: { type: 'string', description: 'Only ideas containing all of these words.' },
+        here: { type: 'boolean', description: 'Only ideas from the current project.' },
+        limit: { type: 'integer' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: 'List ideas', readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'idea_triage',
+    description:
+      'Triage ideas: decide which are worth doing and the cheapest model that can build each. headless=true ' +
+      'does it in a separate minimal Claude Code call (cheapest; your context is not used). Otherwise call with ' +
+      'no verdicts to get the rubric and the untriaged ideas, then call once more with all verdicts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        headless: { type: 'boolean', description: 'Triage the inbox in a separate low-cost `claude -p` call.' },
+        model: { type: 'string', enum: MODEL_ENUM, description: 'Model for headless triage (default sonnet).' },
+        verdicts: BATCH_SCHEMA.properties.verdicts,
+        ids: { type: 'array', items: { type: 'integer' }, description: 'Re-triage these ideas instead of the inbox.' },
+        limit: { type: 'integer', description: 'Max ideas (default 20 headless, 30 otherwise).' },
+        by: { type: 'string', description: 'Your model name, recorded with the verdicts.' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: 'Triage ideas', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'idea_update',
+    description: 'Change an idea: status, text, title, tags, model override, project, or append a note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+        status: { type: 'string', enum: [...STATUSES, 'reopen'] },
+        note: { type: 'string', description: 'Appended to the idea\'s notes, e.g. the outcome.' },
+        title: { type: 'string' },
+        text: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+        model: { type: 'string', enum: MODEL_ENUM },
+        project: { type: 'string' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    annotations: { title: 'Update idea', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'idea_next',
+    description:
+      'Pick the idea to build next (verdict "do", best value per effort, current project first), or fetch one ' +
+      'by id. Returns its brief, project, and the model recommended to build it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+        here: { type: 'boolean', description: 'Only consider ideas from the current project.' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: 'Next idea', readOnlyHint: true, openWorldHint: false },
+  },
+];
+
+// Slash commands for clients that load this server without the plugin (the plugin ships skills instead).
+// The prompt text is the matching SKILL.md body, so both stay in sync.
+const PROMPTS = [
+  { name: 'idea', skill: 'idea', description: 'Save an idea for later', arguments: [{ name: 'text', required: true }] },
+  { name: 'ideas', skill: 'ideas', description: 'Show the idea board', arguments: [{ name: 'request', required: false }] },
+  { name: 'idea-triage', skill: 'idea-triage', description: 'Score the untriaged ideas', arguments: [] },
+  { name: 'idea-go', skill: 'idea-go', description: 'Build the top idea with its model', arguments: [{ name: 'id', required: false }] },
+];
+
+function skillBody(name, args) {
+  const file = new URL(`skills/${name}/SKILL.md`, ROOT);
+  const text = fs.readFileSync(fileURLToPath(file), 'utf8').replace(/^---[\s\S]*?\n---\s*\n/, '');
+  return text.replaceAll('$ARGUMENTS', args || '').trim();
+}
+
+function summarizeTriage(results, how = '') {
+  const ok = results.filter((r) => !r.error);
+  const tally = ['do', 'maybe', 'skip'].map((v) => `${ok.filter((r) => r.verdict === v).length} ${v}`).join(' · ');
+  const lines = [`Saved ${ok.length} verdict${ok.length === 1 ? '' : 's'}: ${tally}${how ? ` (${how})` : ''}`];
+  for (const r of ok) lines.push(`  #${r.id} ${r.verdict}${r.verdict === 'skip' ? '' : ` · ${r.model} · ${r.size.toUpperCase()}`}  ${clip(r.title, 60)}`);
+  for (const r of results.filter((x) => x.error)) lines.push(`  #${r.id} not saved: ${r.error}`);
+  const left = counts(load()).inbox;
+  if (left) lines.push(`${left} still in inbox.`);
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tool handlers return plain text for the model.
+
+const handlers = {
+  idea_add({ text, tags, project }) {
+    const results = addIdeas(splitIdeas(text || ''), { source: 'mcp', project: project || currentProject(), tags });
+    return renderAdded(results, load());
+  },
+
+  idea_list({ id, filter = 'open', query = '', here = false, limit = 0 }) {
+    const db = load();
+    if (id != null) {
+      const idea = findIdea(db, id);
+      if (!idea) throw new Error(`no idea #${id}`);
+      return renderIdea(idea);
+    }
+    return renderBoard(db, { filter, query, limit, project: here ? currentProject() : null, cwd: currentProject() });
+  },
+
+  async idea_triage({ verdicts, ids, limit, by, headless = false, model }) {
+    if (headless) {
+      const out = await headlessTriage({ model, limit: limit || 20 });
+      return out.message || summarizeTriage(out.results, `${out.model}, ${out.tokens.input} in / ${out.tokens.output} out tokens`);
+    }
+    if (Array.isArray(verdicts) && verdicts.length) {
+      return summarizeTriage(applyTriage(verdicts, { by: by ? clip(by, 40) : 'claude' }));
+    }
+    limit ||= 30;
+    const db = load();
+    const pending = pendingIdeas(db, { ids, limit });
+    if (!pending.length) return 'Nothing to triage: the inbox is empty.';
+    return (
+      triagePrompt(db, pending) +
+      '\n\nSave every verdict in ONE idea_triage call: ' +
+      '{"verdicts":[{"id":1,"verdict":"do","impact":3,"size":"s","model":"sonnet","title":"...","why":"...","brief":"..."}]}'
+    );
+  },
+
+  idea_update({ id, ...patch }) {
+    const idea = updateIdea(id, patch);
+    const bits = [`#${idea.id} ${clip(idea.title, 60)} · ${lane(idea)}`];
+    if (patch.model) bits.push(`model ${idea.triage.model}`);
+    if (patch.note) bits.push('note added');
+    return `Updated ${bits.join(' · ')}`;
+  },
+
+  idea_next({ id, here = false }) {
+    const db = load();
+    let idea;
+    if (id != null) {
+      idea = findIdea(db, id);
+      if (!idea) throw new Error(`no idea #${id}`);
+    } else {
+      idea = pickNext(db, { project: currentProject(), only: here });
+    }
+    if (!idea) {
+      const c = counts(db);
+      return c.inbox
+        ? `No idea is ready to build. ${c.inbox} untriaged in the inbox: triage them first.`
+        : 'No idea is ready to build, and the inbox is empty.';
+    }
+    const t = idea.triage;
+    const lines = [renderIdea(idea), ''];
+    if (!t) lines.push('recommended model: none yet (untriaged)');
+    else lines.push(`recommended model: ${t.model}`);
+    lines.push(`project dir: ${idea.project || '(none recorded)'}`);
+    return lines.join('\n');
+  },
+};
+
+// ---------------------------------------------------------------------------------------------
+// JSON-RPC plumbing
+
+function send(msg) {
+  process.stdout.write(JSON.stringify(msg) + '\n');
+}
+
+function result(id, value) {
+  return { jsonrpc: '2.0', id, result: value };
+}
+
+function error(id, code, message) {
+  return { jsonrpc: '2.0', id, error: { code, message } };
+}
+
+async function handleRequest(msg, { prompts }) {
+  const { id, method, params = {} } = msg;
+  switch (method) {
+    case 'initialize': {
+      const asked = params.protocolVersion;
+      const protocolVersion = PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0];
+      const capabilities = { tools: { listChanged: false } };
+      if (prompts) capabilities.prompts = { listChanged: false };
+      return result(id, { protocolVersion, capabilities, serverInfo: { name: 'ideamine', version: VERSION }, instructions: INSTRUCTIONS });
+    }
+    case 'ping':
+      return result(id, {});
+    case 'tools/list':
+      return result(id, { tools: TOOLS });
+    case 'tools/call': {
+      const handler = handlers[params.name];
+      if (!handler) return error(id, -32602, `unknown tool: ${params.name}`);
+      try {
+        const text = await handler(params.arguments || {});
+        return result(id, { content: [{ type: 'text', text }] });
+      } catch (e) {
+        return result(id, { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true });
+      }
+    }
+    case 'prompts/list':
+      return result(id, { prompts: prompts ? PROMPTS.map(({ skill, ...p }) => p) : [] });
+    case 'prompts/get': {
+      const p = prompts && PROMPTS.find((x) => x.name === params.name);
+      if (!p) return error(id, -32602, `unknown prompt: ${params.name}`);
+      const args = Object.values(params.arguments || {}).filter(Boolean).join(' ');
+      return result(id, {
+        description: p.description,
+        messages: [{ role: 'user', content: { type: 'text', text: skillBody(p.skill, args) } }],
+      });
+    }
+    case 'resources/list':
+      return result(id, { resources: [] });
+    case 'resources/templates/list':
+      return result(id, { resourceTemplates: [] });
+    case 'logging/setLevel':
+      return result(id, {});
+    default:
+      return error(id, -32601, `method not found: ${method}`);
+  }
+}
+
+async function handleMessage(msg, opts) {
+  if (!msg || typeof msg !== 'object' || msg.jsonrpc !== '2.0') return error(null, -32600, 'invalid request');
+  if (typeof msg.method !== 'string') return null; // a response to a request we never send
+  if (msg.id === undefined) return null; // notification (initialized, cancelled, ...)
+  try {
+    return await handleRequest(msg, opts);
+  } catch (e) {
+    return error(msg.id, -32603, e.message);
+  }
+}
+
+async function handleLine(line, opts) {
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return error(null, -32700, 'parse error');
+  }
+  if (!Array.isArray(msg)) return handleMessage(msg, opts);
+  const replies = (await Promise.all(msg.map((m) => handleMessage(m, opts)))).filter(Boolean);
+  return replies.length ? replies : null;
+}
+
+/** Serve MCP on stdin/stdout. `prompts: false` when running as a plugin (skills cover slash commands). */
+export function serve({ prompts = true } = {}) {
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const inFlight = new Set();
+  // Requests run concurrently (a headless triage must not stall a ping); replies carry their ids.
+  rl.on('line', (line) => {
+    if (!line.trim()) return;
+    const job = handleLine(line, { prompts }).then((reply) => reply && send(reply));
+    inFlight.add(job);
+    job.finally(() => inFlight.delete(job));
+  });
+  rl.on('close', () => Promise.allSettled([...inFlight]).then(() => process.exit(0)));
+}

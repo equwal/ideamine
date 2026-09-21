@@ -1,0 +1,43 @@
+{
+  "name": "ideamine",
+  "version": "0.1.0",
+  "description": "An idea inbox for Claude Code. /idea saves an idea without calling the model; Claude later triages each idea and picks the cheapest model that can build it.",
+  "type": "module",
+  "bin": {
+    "ideamine": "bin/ideamine.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "hooks",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/equwal/ideamine.git"
+  },
+  "homepage": "https://github.com/equwal/ideamine#readme",
+  "bugs": "https://github.com/equwal/ideamine/issues",
+  "author": "Spenser Truex",
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-code-plugin",
+    "mcp",
+    "mcp-server",
+    "ideas",
+    "backlog",
+    "vibecoding"
+  ]
+}

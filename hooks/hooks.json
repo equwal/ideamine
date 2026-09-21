@@ -1,0 +1,17 @@
+{
+  "description": "ideamine: answer /idea and /ideas locally, so they never call the model",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/ideamine.js", "hook"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
