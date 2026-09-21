@@ -149,8 +149,17 @@ const TOOLS = [
 // Slash commands for clients that load this server without the plugin (the plugin ships skills instead).
 // The prompt text is the matching SKILL.md body, so both stay in sync.
 const PROMPTS = [
-  { name: 'idea', skill: 'idea', description: 'Save an idea for later', arguments: [{ name: 'text', required: true }] },
-  { name: 'ideas', skill: 'ideas', description: 'The idea queue: ls, cat, rm, go, all, sort', arguments: [{ name: 'request', required: false }] },];
+  { name: 'idea', description: 'Save an idea for later', arguments: [{ name: 'text', required: true }] },
+  { name: 'ideas', description: 'Show the queue, or ask about your ideas', arguments: [{ name: 'question', required: false }] },
+  { name: 'ideas-ls', description: 'List the queue, one lane, or every lane (-a)', arguments: [{ name: 'lane', required: false }] },
+  { name: 'ideas-cat', description: 'Show ideas in full', arguments: [{ name: 'ids', required: true }] },
+  { name: 'ideas-rm', description: 'Delete ideas for good', arguments: [{ name: 'ids', required: true }] },
+  { name: 'ideas-done', description: 'Mark an idea done', arguments: [{ name: 'id', required: true }, { name: 'note', required: false }] },
+  { name: 'ideas-reopen', description: 'Put an idea back in the queue', arguments: [{ name: 'id', required: true }] },
+  { name: 'ideas-go', description: 'Build the next idea on its recommended model', arguments: [{ name: 'id', required: false }] },
+  { name: 'ideas-all', description: 'Do every idea that fits this chat', arguments: [] },
+  { name: 'ideas-sort', description: 'Triage the inbox now and show the queue', arguments: [] },
+];
 
 function skillBody(name, args) {
   const file = new URL(`skills/${name}/SKILL.md`, ROOT);
@@ -315,14 +324,14 @@ async function handleRequest(msg, { prompts }) {
       }
     }
     case 'prompts/list':
-      return result(id, { prompts: prompts ? PROMPTS.map(({ skill, ...p }) => p) : [] });
+      return result(id, { prompts: prompts ? PROMPTS : [] });
     case 'prompts/get': {
       const p = prompts && PROMPTS.find((x) => x.name === params.name);
       if (!p) return error(id, -32602, `unknown prompt: ${params.name}`);
       const args = Object.values(params.arguments || {}).filter(Boolean).join(' ');
       return result(id, {
         description: p.description,
-        messages: [{ role: 'user', content: { type: 'text', text: skillBody(p.skill, args) } }],
+        messages: [{ role: 'user', content: { type: 'text', text: skillBody(p.name, args) } }],
       });
     }
     case 'resources/list':

@@ -63,8 +63,8 @@ export function renderBoard(db, { filter = 'open', project = null, query = '', c
   }
   if (hints) {
     const tips = ['/idea <text> add'];
-    if (counts(db).open) tips.push('/ideas go build next', '/ideas all do all that fit here');
-    if (db.ideas.length) tips.push('/ideas cat N show', '/ideas rm N delete', '/ideas help');
+    if (counts(db).open) tips.push('/ideas-go build next', '/ideas-all do all that fit here');
+    if (db.ideas.length) tips.push('/ideas-cat N show', '/ideas-rm N delete');
     out.push('', tips.join(' · '));
   }
   return out.join('\n');

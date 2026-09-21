@@ -107,9 +107,12 @@ test('tool errors come back as isError results, not protocol errors', async () =
 
 test('prompts mirror the skills', async () => {
   const list = await request('prompts/list');
-  assert.deepEqual(list.result.prompts.map((p) => p.name), ['idea', 'ideas']);
-  const ideas = await request('prompts/get', { name: 'ideas', arguments: { request: 'go 12' } });
-  assert.match(ideas.result.messages[0].content.text, /^Request: go 12\n[\s\S]*idea_next[\s\S]*idea_remove/);
+  const names = list.result.prompts.map((p) => p.name);
+  assert.deepEqual(names, ['idea', 'ideas', 'ideas-ls', 'ideas-cat', 'ideas-rm', 'ideas-done', 'ideas-reopen', 'ideas-go', 'ideas-all', 'ideas-sort']);
+  // One prompt for each skill, so that other MCP clients get the same commands as the plugin.
+  assert.deepEqual([...names].sort(), fs.readdirSync(new URL('../skills', import.meta.url)).sort());
+  const go = await request('prompts/get', { name: 'ideas-go', arguments: { id: '12' } });
+  assert.match(go.result.messages[0].content.text, /Requested idea: 12\b[\s\S]*idea_next[\s\S]*run_in_background/);
   const got = await request('prompts/get', { name: 'idea', arguments: { text: 'teleport the cat' } });
   const text = got.result.messages[0].content.text;
   assert.match(text, /teleport the cat/);

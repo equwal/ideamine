@@ -119,8 +119,8 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
 }
 
 /**
- * The triage that `go` needs before it picks: the idea `id` when it has no verdict, else the whole
- * inbox. Returns the headlessTriage result, or null when every candidate has a verdict already.
+ * The triage that /ideas-go needs before it picks: the idea `id` when it has no verdict, else the
+ * whole inbox. Returns the headlessTriage result, or null when every candidate has a verdict already.
  */
 export async function triageFirst({ id = null, model } = {}) {
   const db = load();

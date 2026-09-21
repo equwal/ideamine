@@ -1,26 +1,28 @@
-// UserPromptSubmit hook: answers /idea and the local /ideas commands (ls, cat, rm, done, ...) and
-// blocks the prompt, so the model is never called. That makes capture free, instant, and possible
-// even when the session is out of usage. Every other prompt passes through untouched, including
-// /ideas go, all, sort, and questions, which the /ideas skill answers.
+// UserPromptSubmit hook: answers /idea, /ideas, and the local /ideas-* commands (ls, cat, rm, done,
+// reopen) and blocks the prompt, so the model is never called. That makes capture free, instant,
+// and possible even when the session is out of usage. Every other prompt passes through untouched,
+// including /ideas-go, /ideas-all, /ideas-sort, and questions, which their skills answer.
 
 import { renderAdded, renderBoard, renderIdea } from './render.js';
 import { addIdeas, FILTERS, findIdea, lane, load, removeIdeas, updateIdea } from './store.js';
 import { clip, splitIdeas } from './text.js';
 
-// `/idea ...`, `/ideas ...`, and the plugin-qualified `/ideamine:idea ...` forms.
-const COMMAND = /^\s*\/(?:ideamine:)?(ideas?)(?=\s|$)([\s\S]*)$/i;
-const EDIT_VERBS = { done: 'done', finish: 'done', drop: 'dropped', doing: 'doing', start: 'doing', reopen: 'reopen' };
+// `/idea ...`, `/ideas ...`, `/ideas-<verb> ...`, and the plugin-qualified `/ideamine:...` forms.
+// Each verb is a separate skill with a dash, so that the slash menu shows it.
+const COMMAND = /^\s*\/(?:ideamine:)?(idea|ideas(?:-[a-z]+)?)(?=\s|$)([\s\S]*)$/i;
+const STATUS_COMMANDS = { 'ideas-done': 'done', 'ideas-reopen': 'reopen' };
 const ID = /^#?\d+$/;
 
-const USAGE = `Usage: /idea <text>                  add an idea (a bulleted list adds one idea per bullet)
-       /ideas [ls [lane|-a] [here]]   list the queue. Lanes: inbox do maybe skip doing done dropped
-       /ideas cat N...                show ideas in full
-       /ideas rm N...                 delete ideas for good
-       /ideas done|start|reopen|drop N [note]
+const USAGE = `Usage: /idea <text>                add an idea (a bulleted list adds one idea per bullet)
+       /ideas [question]            show the queue, or ask about your ideas
+       /ideas-ls [lane|-a] [here]   list. Lanes: inbox do maybe skip doing done dropped
+       /ideas-cat N...              show ideas in full
+       /ideas-rm N...               delete ideas for good
+       /ideas-done N [note] · /ideas-reopen N
 These call the model:
-       /ideas go [N]                  build the next idea, or #N, on its model. New ideas are triaged first.
-       /ideas all                     do every idea that fits this chat. The others stay in the queue.
-       /ideas sort                    triage the inbox now and show the queue`;
+       /ideas-go [N]                build the next idea, or #N, on its model. New ideas are triaged first.
+       /ideas-all                   do every idea that fits this chat. The others stay in the queue.
+       /ideas-sort                  triage the inbox now and show the queue`;
 
 const noIdea = (ids) => `No idea ${ids.map((id) => `#${String(id).replace(/^#/, '')}`).join(', ')}.`;
 
@@ -48,15 +50,14 @@ export function handlePrompt(prompt, { cwd = process.cwd(), session = null } = {
     return renderAdded(results, load());
   }
 
-  // /ideas <verb> [args]. The verb comes first, as in a shell, so "all" is never a view.
-  const [first = 'ls', ...rest] = arg.split(/\s+/).filter(Boolean);
-  const verb = first.toLowerCase();
-  const ids = ID.test(first) ? [first, ...rest] : rest;
-  const allIds = ids.length > 0 && ids.every((w) => ID.test(w));
+  const words = arg.split(/\s+/).filter(Boolean);
+  const ids = words.length > 0 && words.every((w) => ID.test(w)) ? words : null;
   const db = load();
 
-  if (verb === 'ls') {
-    const lower = rest.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
+  if (command === 'ideas' && !words.length) return renderBoard(db, { cwd, hints: true });
+
+  if (command === 'ideas-ls') {
+    const lower = words.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
     const filters = lower.filter((w) => FILTERS.includes(w));
     const here = lower.includes('here');
     if (filters.length + (here ? 1 : 0) === lower.length && filters.length <= 1) {
@@ -64,27 +65,22 @@ export function handlePrompt(prompt, { cwd = process.cwd(), session = null } = {
     }
   }
 
-  if ((verb === 'cat' || ID.test(first)) && allIds) {
-    const missing = ids.filter((id) => !findIdea(db, id));
-    return missing.length ? noIdea(missing) : ids.map((id) => renderIdea(findIdea(db, id))).join('\n\n');
-  }
-
-  if (verb === 'rm' && allIds) {
+  if ((command === 'ideas-cat' || command === 'ideas-rm') && ids) {
     const missing = ids.filter((id) => !findIdea(db, id));
     if (missing.length) return noIdea(missing);
+    if (command === 'ideas-cat') return ids.map((id) => renderIdea(findIdea(db, id))).join('\n\n');
     return removeIdeas(ids).map((i) => `✗ Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
   }
 
-  const status = EDIT_VERBS[verb];
-  if (status && rest[0] && ID.test(rest[0])) {
-    const note = rest.slice(1).join(' ');
-    const idea = updateIdea(rest[0], { status, note: note || undefined });
+  const status = STATUS_COMMANDS[command];
+  if (status && words[0] && ID.test(words[0])) {
+    if (!findIdea(db, words[0])) return noIdea([words[0]]);
+    const note = words.slice(1).join(' ');
+    const idea = updateIdea(words[0], { status, note: note || undefined });
     return `✓ #${idea.id} ${clip(idea.title, 60)} → ${lane(idea)}${note ? ' (note added)' : ''}`;
   }
 
-  if (verb === 'help') return USAGE;
-
-  return null; // go, all, sort, or a question: the /ideas skill answers it with the model
+  return null; // a question, /ideas-go, -all, -sort, or other words: the skill answers with the model
 }
 
 export async function runHook() {

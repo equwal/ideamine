@@ -43,57 +43,59 @@ test('ordinary prompts, model commands, and questions pass straight through', ()
   const prompts = [
     'fix the tests',
     '/ideasx',
+    '/idea-go 3', // a name from before 0.3.0: no command now
     'an /idea in the middle',
-    '/ideas go',
-    '/ideamine:ideas go 3',
-    '/ideas all', // a command, never a view: a view is "ls all"
-    '/ideas sort',
-    '/ideas inbox', // the verb comes first, so a bare lane is a request for the model
-    '/ideas cat',
-    '/ideas ls ideas about scrolling',
-    '/ideas rm the vague one',
+    '/ideas-go',
+    '/ideamine:ideas-go 3',
+    '/ideas-all',
+    '/ideas-sort',
+    '/ideas-cat',
+    '/ideas-ls ideas about scrolling', // not lanes: the skill searches with these words
+    '/ideas-rm the vague one',
+    '/ideas all', // with a space it is a question for the model, never a command
     '/ideas what should I build today?',
   ];
   for (const p of prompts) assert.equal(runHook(p), null, p);
   assert.equal(store.load().ideas.length, 0);
 });
 
-test('/ideas lists the queue, shows ideas, and applies quick edits', () => {
+test('/ideas and the dashed commands list, show, and edit ideas', () => {
   store.addIdeas(['alpha', 'beta'], { project: '/work/app' });
   assert.match(runHook('/ideas').reason, /2 open[\s\S]*#2 {3}beta[\s\S]*#1 {3}alpha/);
-  assert.equal(runHook('/ideas ls').reason, runHook('/ideas').reason);
-  assert.match(runHook('/ideas #1').reason, /^#1 alpha/);
-  assert.match(runHook('/ideas cat 1 2').reason, /^#1 alpha\n[\s\S]*\n\n#2 beta\n/);
-  assert.match(runHook('/ideas done 1 shipped it').reason, /#1 alpha → done/);
-  assert.match(runHook('/ideas ls done').reason, /DONE[\s\S]*#1/);
-  assert.match(runHook('/ideas ls -a').reason, /\[showing: all\][\s\S]*#2[\s\S]*#1/);
-  assert.match(runHook('/ideas 9').reason, /No idea #9/);
-  assert.match(runHook('/ideas cat 1 8 9').reason, /^No idea #8, #9\.$/);
-  assert.match(runHook('/ideas help').reason, /^Usage[\s\S]*\/ideas rm N/);
-  assert.match(runHook('/idea').reason, /^Usage/);
+  assert.equal(runHook('/ideas-ls').reason, runHook('/ideas').reason);
+  assert.match(runHook('/ideas-cat #1').reason, /^#1 alpha/);
+  assert.match(runHook('/ideas-cat 1 2').reason, /^#1 alpha\n[\s\S]*\n\n#2 beta\n/);
+  assert.match(runHook('/ideas-done 1 shipped it').reason, /#1 alpha → done \(note added\)/);
+  assert.match(runHook('/ideas-ls done').reason, /DONE[\s\S]*#1/);
+  assert.match(runHook('/ideas-ls -a').reason, /\[showing: all\][\s\S]*#2[\s\S]*#1/);
+  assert.match(runHook('/ideamine:ideas-reopen 1').reason, /#1 alpha → inbox/);
+  assert.equal(runHook('/ideas-cat 9').reason, 'No idea #9.');
+  assert.equal(runHook('/ideas-cat 1 8 9').reason, 'No idea #8, #9.');
+  assert.equal(runHook('/ideas-done 9').reason, 'No idea #9.');
+  assert.match(runHook('/idea').reason, /^Usage[\s\S]*\/ideas-rm N/);
 });
 
-test('/ideas rm deletes ideas for good, without a model call', () => {
+test('/ideas-rm deletes ideas for good, without a model call', () => {
   store.addIdeas(['alpha', 'beta', 'gamma', 'delta']);
-  const out = runHook('/ideas rm 1 #3');
+  const out = runHook('/ideas-rm 1 #3');
   assert.equal(out.decision, 'block');
   assert.match(out.reason, /Removed #1 · alpha\n.*Removed #3 · gamma$/);
-  assert.equal(runHook('/ideas rm 2 9').reason, 'No idea #9.'); // an unknown id deletes nothing
-  assert.match(runHook('/ideamine:ideas rm 4').reason, /Removed #4 · delta/);
+  assert.equal(runHook('/ideas-rm 2 9').reason, 'No idea #9.'); // an unknown id deletes nothing
+  assert.match(runHook('/ideamine:ideas-rm 4').reason, /Removed #4 · delta/);
   assert.deepEqual(store.load().ideas.map((i) => i.text), ['beta']);
 });
 
-test('the board tells how to build, take, and remove ideas, and does not send you to a triage', () => {
+test('the board names the dashed commands, and does not send you to a triage', () => {
   store.addIdeas(['alpha']);
   const board = runHook('/ideas').reason;
-  for (const tip of [/\/ideas go/, /\/ideas all/, /\/ideas rm N/]) assert.match(board, tip);
-  assert.doesNotMatch(board, /\/idea-triage|\/ideas sort/);
+  for (const tip of [/\/ideas-go/, /\/ideas-all/, /\/ideas-rm N/]) assert.match(board, tip);
+  assert.doesNotMatch(board, /\/idea-triage|\/ideas-sort/);
 });
 
 test('handlePrompt filters by project with "here"', () => {
   store.addIdeas(['mine'], { project: '/a' });
   store.addIdeas(['theirs'], { project: '/b' });
-  const board = handlePrompt('/ideas ls here', { cwd: '/a' });
+  const board = handlePrompt('/ideas-ls here', { cwd: '/a' });
   assert.match(board, /mine/);
   assert.doesNotMatch(board, /theirs/);
 });

@@ -206,7 +206,7 @@ const READY_LANES = ['do', 'maybe'];
 
 /**
  * Best idea to build next: verdict "do" before "maybe", not started, current project first, then
- * value per effort. A "maybe" idea is still in the queue, so /ideas go builds it when no "do" is left.
+ * value per effort. A "maybe" idea is still in the queue, so /ideas-go builds it when no "do" is left.
  */
 export function pickNext(db, { project = null, only = false } = {}) {
   let ready = db.ideas.filter((i) => READY_LANES.includes(lane(i)));
