@@ -3,16 +3,16 @@
   "name": "ideamine",
   "description": "ideamine: an idea inbox for Claude Code, with model routing",
   "owner": {
-    "name": "Spenser Truex",
+    "name": "equwal",
     "url": "https://github.com/equwal"
   },
   "plugins": [
     {
       "name": "ideamine",
       "description": "An idea inbox for Claude Code. /idea saves an idea without a model call. Claude triages the ideas and picks the cheapest model that can build each one.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
-        "name": "Spenser Truex"
+        "name": "equwal"
       },
       "source": "./",
       "category": "productivity",
