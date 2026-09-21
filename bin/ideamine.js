@@ -18,6 +18,13 @@ const HELP = `ideamine: an idea inbox for Claude Code
                                   triage the inbox with one headless \`claude -p\` call
   ideamine watch [off]            the watcher: Haiku triages new ideas and pairs them with projects
   ideamine watch-pass             one pass of the watcher, now, in the foreground
+  ideamine find <words...>        search by meaning (nomic-embed-text), in every lane
+  ideamine groups [lane|-a]       ideas grouped by meaning
+  ideamine embed                  embed new ideas, and show how the vectors and thresholds fit
+  ideamine publish [url|off] [--dir <folder>]
+                                  upload the dashboard (index.html, data.json) now; a url also turns
+                                  on the upload after each change; --dir writes the files to a folder
+  ideamine config [key [value]]   show or change a setting (an empty value restores the default)
   ideamine export [file.md]       Markdown export of the whole archive
   ideamine path                   where the archive lives (override with IDEAMINE_HOME)
   ideamine mcp                    run the MCP server on stdio
@@ -31,7 +38,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [key, inline] = a.slice(2).split('=', 2);
       if (inline !== undefined) flags[key] = inline;
-      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && ['model', 'limit', 'budget', 'query'].includes(key)) flags[key] = argv[++i];
+      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && ['model', 'limit', 'budget', 'query', 'dir'].includes(key)) flags[key] = argv[++i];
       else flags[key] = true;
     } else words.push(a);
   }
@@ -169,6 +176,53 @@ async function main() {
     case 'watch-pass': {
       const watch = await import('../src/watch.js');
       if ((await watch.pass()) === 'error') process.exitCode = 1;
+      break;
+    }
+    case 'find': {
+      const embed = await import('../src/embed.js');
+      const query = words.join(' ') || fail('usage: ideamine find <words...>');
+      console.log(render.renderFound(await embed.find(store.load(), query), query, { cwd }));
+      break;
+    }
+    case 'groups': {
+      const embed = await import('../src/embed.js');
+      const lower = words.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
+      const filter = lower.find((w) => store.FILTERS.includes(w)) || 'open';
+      const ideas = store.listIdeas(store.load(), { filter });
+      console.log(render.renderGroups(await embed.groupIdeas(ideas), ideas, { cwd, scope: filter }));
+      break;
+    }
+    case 'embed': {
+      const embed = await import('../src/embed.js');
+      console.log(await embed.status(store.load()));
+      break;
+    }
+    case 'publish': {
+      const publish = await import('../src/publish.js');
+      if (flags.background) {
+        process.exitCode = (await publish.backgroundPublish()) === 'error' ? 1 : 0;
+        break;
+      }
+      const config = await import('../src/config.js');
+      if (words[0] === 'off') {
+        config.set('publish_url', '');
+        console.log(publish.status());
+        break;
+      }
+      if (words[0]) config.set('publish_url', words[0]);
+      const out = await publish.publish({ dir: typeof flags.dir === 'string' ? flags.dir : null });
+      console.log(`Published ${out.ideas} ideas and ${out.groups} groups to ${out.where}`);
+      if (out.note) console.log(out.note);
+      break;
+    }
+    case 'config': {
+      const config = await import('../src/config.js');
+      if (words.length >= 1 && rest.length >= 2) config.set(words[0], words.slice(1).join(' '));
+      else if (words.length === 1 && rest.length === 1) {
+        console.log(config.get(words[0]));
+        break;
+      }
+      console.log(config.describe());
       break;
     }
     case 'export': {

@@ -71,6 +71,29 @@ export function renderBoard(db, { filter = 'open', project = null, query = '', c
   return out.join('\n');
 }
 
+/** Search results, best first, with the similarity (by meaning) or the share of words found. */
+export function renderFound({ mode, results, note }, query, { cwd = null } = {}) {
+  const how = mode === 'meaning' ? 'by meaning' : `by words, because search by meaning is not available (${note})`;
+  const out = [`ideas like "${clip(query, 60)}", ${how}`];
+  if (!results.length) out.push('  (no match)');
+  for (const { idea, score } of results) {
+    out.push(`${String(Math.round(score * 100)).padStart(4)}% ${lane(idea).padEnd(7)}${ideaLine(idea, { cwd }).slice(1)}`);
+  }
+  return out.join('\n');
+}
+
+/** Groups of ideas that are close in meaning, then the ideas in no group. */
+export function renderGroups(groups, ideas, { cwd = null, scope = 'open' } = {}) {
+  const out = [`ideamine groups: ${groups.length} group${groups.length === 1 ? '' : 's'} of ${scope} ideas, by meaning`];
+  const byId = new Map(ideas.map((i) => [i.id, i]));
+  const line = (idea) => `  ${lane(idea).padEnd(7)}${ideaLine(idea, { cwd }).slice(1)}`;
+  for (const g of groups) out.push('', g.label.toUpperCase(), ...g.ids.map((id) => line(byId.get(id))));
+  const grouped = new Set(groups.flatMap((g) => g.ids));
+  const rest = ideas.filter((i) => !grouped.has(i.id));
+  if (rest.length) out.push('', 'IN NO GROUP', ...rest.map(line));
+  return out.join('\n');
+}
+
 /** One idea in full. */
 export function renderIdea(idea) {
   const t = idea.triage;

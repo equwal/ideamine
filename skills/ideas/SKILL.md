@@ -8,4 +8,4 @@ allowed-tools: mcp__plugin_ideamine_ideamine__idea_list, mcp__plugin_ideamine_id
 
 Request: $ARGUMENTS
 
-Answer from `idea_list`. Pass `filter`, `id`, `query`, `here`, or `full` when the request asks for them. If the request is empty, show the board exactly as returned. To change a status, use `idea_update`. To delete ideas, use `idea_remove`. Keep the answer short. Do not start to build an idea: /ideas-go and /ideas-all do that.
+Answer from `idea_list`. Pass `filter`, `id`, `query`, `here`, or `full` when the request asks for them. For a question about a topic, pass the topic as `query` with `semantic: true`, which finds ideas by meaning. For a question about themes or clusters, pass `groups: true`. If the request is empty, show the board exactly as returned. To change a status, use `idea_update`. To delete ideas, use `idea_remove`. Keep the answer short. Do not start to build an idea: /ideas-go and /ideas-all do that.

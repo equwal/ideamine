@@ -7,6 +7,7 @@ import { beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { handlePrompt } from '../src/hook.js';
 import * as store from '../src/store.js';
+import { startFakeServer } from './fixtures/fake-server.js';
 
 const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 
@@ -113,10 +114,10 @@ test('while the watcher is on, a saved idea is triaged in the background', async
   assert.equal(store.findIdea(store.load(), 1).triage?.by, 'haiku (headless)');
 });
 
-test('handlePrompt filters by project with "here"', () => {
+test('handlePrompt filters by project with "here"', async () => {
   store.addIdeas(['mine'], { project: '/a' });
   store.addIdeas(['theirs'], { project: '/b' });
-  const board = handlePrompt('/ideas-ls here', { cwd: '/a' });
+  const board = await handlePrompt('/ideas-ls here', { cwd: '/a' });
   assert.match(board, /mine/);
   assert.doesNotMatch(board, /theirs/);
 });
@@ -132,4 +133,40 @@ test('when the archive is unreadable the prompt goes through instead of being lo
   assert.equal(r.status, 0);
   assert.equal(r.stdout, '');
   assert.match(r.stderr, /not valid JSON/);
+});
+
+test('/ideas-find searches by meaning and /ideas-groups groups by meaning, with no model call', async () => {
+  const server = await startFakeServer();
+  process.env.IDEAMINE_EMBED_URL = `${server.url}/v1`;
+  process.env.IDEAMINE_GROUP_THRESHOLD = '0.5';
+  try {
+    store.addIdeas(['subtitles for audiobooks', 'subtitles for audiobooks on android', 'a tor exit relay']);
+    const found = await handlePrompt('/ideas-find audiobooks with subtitles');
+    assert.match(found, /^ideas like "audiobooks with subtitles", by meaning\n.*#1 .*\n.*#2 /);
+    assert.doesNotMatch(found, /tor exit/);
+    const groups = await handlePrompt('/ideas-groups');
+    assert.match(groups, /^ideamine groups: 1 group of open ideas/);
+    assert.match(groups, /IN NO GROUP\n.*#3 /);
+    assert.equal(await handlePrompt('/ideas-groups what is this'), null); // a question: the skill answers
+  } finally {
+    await server.close();
+    delete process.env.IDEAMINE_EMBED_URL;
+    delete process.env.IDEAMINE_GROUP_THRESHOLD;
+  }
+});
+
+test('/ideas-find falls back to words when the embedding server is away', async () => {
+  const closed = await startFakeServer();
+  await closed.close(); // nothing listens on its port now
+  process.env.IDEAMINE_EMBED_URL = `${closed.url}/v1`;
+  try {
+    store.addIdeas(['subtitles for audiobooks', 'dark mode']);
+    const out = runHook('/ideas-find subtitles');
+    assert.equal(out.decision, 'block');
+    assert.match(out.reason, /by words, because search by meaning is not available \(cannot reach/);
+    assert.match(out.reason, /#1 /);
+    assert.doesNotMatch(out.reason, /#2 /);
+  } finally {
+    delete process.env.IDEAMINE_EMBED_URL;
+  }
 });

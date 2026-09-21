@@ -6,8 +6,9 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { headlessTriage, triageFirst } from './claude.js';
+import * as embed from './embed.js';
 import { knownProjects } from './projects.js';
-import { renderAdded, renderBoard, renderIdea } from './render.js';
+import { renderAdded, renderBoard, renderFound, renderGroups, renderIdea } from './render.js';
 import { BATCH_SCHEMA, MODELS, pendingIdeas, triagePrompt } from './rubric.js';
 import {
   addIdeas,
@@ -58,13 +59,17 @@ const TOOLS = [
   },
   {
     name: 'idea_list',
-    description: 'Show the idea board, or one idea in full when id is given. full=true shows every listed idea in full.',
+    description:
+      'Show the idea board, or one idea in full when id is given. full=true shows every listed idea in full. ' +
+      'semantic=true ranks ideas by meaning for the query. groups=true groups the listed ideas by meaning.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'integer', description: 'Show this idea in full.' },
         filter: { type: 'string', enum: FILTERS, description: 'Default: open (doing, do, maybe, inbox).' },
-        query: { type: 'string', description: 'Only ideas containing all of these words.' },
+        query: { type: 'string', description: 'Only ideas containing all of these words (with semantic: ideas like it).' },
+        semantic: { type: 'boolean', description: 'Rank by meaning (nomic-embed-text), best first. Falls back to words.' },
+        groups: { type: 'boolean', description: 'Group the listed ideas by meaning.' },
         here: { type: 'boolean', description: 'Only ideas from the current project.' },
         limit: { type: 'integer' },
         full: { type: 'boolean', description: 'Every listed idea in full (brief, text, notes), not one line each.' },
@@ -156,6 +161,8 @@ const PROMPTS = [
   { name: 'ideas-ls', description: 'List the queue, one lane, or every lane (-a)', arguments: [{ name: 'lane', required: false }] },
   { name: 'ideas-cat', description: 'Show ideas in full', arguments: [{ name: 'ids', required: true }] },
   { name: 'ideas-rm', description: 'Delete ideas for good', arguments: [{ name: 'ids', required: true }] },
+  { name: 'ideas-find', description: 'Search ideas by meaning', arguments: [{ name: 'words', required: true }] },
+  { name: 'ideas-groups', description: 'Show ideas grouped by meaning', arguments: [{ name: 'lane', required: false }] },
   { name: 'ideas-done', description: 'Mark an idea done', arguments: [{ name: 'id', required: true }, { name: 'note', required: false }] },
   { name: 'ideas-reopen', description: 'Put an idea back in the queue', arguments: [{ name: 'id', required: true }] },
   { name: 'ideas-go', description: 'Build the next idea on its recommended model', arguments: [{ name: 'id', required: false }] },
@@ -202,7 +209,7 @@ const handlers = {
     return renderAdded(results, load());
   },
 
-  idea_list({ id, filter = 'open', query = '', here = false, limit = 0, full = false }) {
+  async idea_list({ id, filter = 'open', query = '', here = false, limit = 0, full = false, semantic = false, groups = false }) {
     const db = load();
     if (id != null) {
       const idea = findIdea(db, id);
@@ -210,6 +217,15 @@ const handlers = {
       return renderIdea(idea);
     }
     const project = here ? currentProject() : null;
+    if (semantic && query) {
+      const found = await embed.find(db, query, { filter, project, limit: limit || 10 });
+      if (!full) return renderFound(found, query, { cwd: currentProject() });
+      return found.results.length ? found.results.map((r) => renderIdea(r.idea)).join('\n\n') : 'No ideas match.';
+    }
+    if (groups) {
+      const ideas = listIdeas(db, { filter, query, limit, project });
+      return renderGroups(await embed.groupIdeas(ideas), ideas, { cwd: currentProject(), scope: filter });
+    }
     if (full) {
       const ideas = listIdeas(db, { filter, query, limit, project });
       return ideas.length ? ideas.map(renderIdea).join('\n\n') : 'No ideas match.';

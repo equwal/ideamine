@@ -97,6 +97,18 @@ test('status changes, notes, model override, and reopen', () => {
   assert.throws(() => store.updateIdea(42, { note: 'x' }), /no idea #42/);
 });
 
+test('the start time is recorded when work starts, for the dashboard timeline', async () => {
+  store.addIdeas(['thing']);
+  assert.equal(store.findIdea(store.load(), 1).started, undefined);
+  const first = store.updateIdea(1, { status: 'doing' }).started;
+  assert.ok(first);
+  assert.equal(store.updateIdea(1, { status: 'doing', note: 'still on it' }).started, first); // no new start
+  assert.equal(store.updateIdea(1, { status: 'done' }).started, first);
+  store.updateIdea(1, { status: 'reopen' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(store.updateIdea(1, { status: 'start' }).started > first); // the latest start
+});
+
 test('a corrupt archive is never overwritten', () => {
   fs.mkdirSync(store.home(), { recursive: true });
   fs.writeFileSync(store.dbPath(), '{"ideas": [oops');

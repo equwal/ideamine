@@ -42,6 +42,8 @@ Marketplaces you add yourself do not auto-update. To upgrade, run `claude plugin
 | `/ideas-rm 12 14` | Delete ideas for good | **No** |
 | `/ideas-done 12 shipped it` | Mark an idea done, with a note | **No** |
 | `/ideas-reopen 12` | Put an idea back in the queue, for example one that the triage skipped | **No** |
+| `/ideas-find sync subtitles` | Search every lane by meaning, not only by the words. See [Search by meaning](#search-by-meaning-and-groups). | **No** |
+| `/ideas-groups` · `done` · `-a` | Show the ideas grouped by meaning | **No** |
 | `/ideas-go [12]` | Build the idea that fits this chat, else the first in the queue, or #12, on its recommended model. New ideas are triaged first. | Yes, this is the build |
 | `/ideas-all` | Claude reads every idea, takes the ones that fit this chat out of the queue, and does them. The others stay in the queue. | Yes, this is the build |
 | `/ideas-sort` | Triage the inbox now and show the queue. You do not have to: `/ideas-go` triages when it must. | Yes, briefly |
@@ -66,6 +68,68 @@ Claude can also save ideas by itself. If you write "idea: dark mode for the popu
 Run `/ideas-watch` once. After that, a few seconds after you save an idea, Haiku (the cheapest model) triages it and pairs it with its project. The triage chooses from the folders of your ideas and the projects that Claude Code knows (`~/.claude.json`), and it reads the first line of each README. If no project fits, for example for an idea for a new product, the idea stays where you saved it. The first pass also triages again the open ideas from before 0.4.0, so that they get a project too.
 
 The watcher is not a process that stays alive, because a process like that can stop: a crash, a reboot, a full context, or a usage limit. Instead, the ideamine hook starts a short background pass when you send a prompt and there is work. Thus the watcher keeps going while you use Claude Code, and it costs nothing while no new ideas come in. A failed call gets 2 more tries in the same pass. After a failed pass, the watcher waits 10 minutes before it tries again. `/ideas-watch` shows the last passes, and `/ideas-watch off` turns the watcher off. In a terminal, `ideamine watch` does the same. The log is `~/.ideamine/watch.log`.
+
+## Search by meaning and groups
+
+```
+> /ideas-find make money
+  ideas like "make money", by meaning
+    53% done    #4   sonnet S  ▲3  Research monetization models for device-hacking utility apps
+```
+
+`/ideas-find` finds ideas that mean the same thing as your words, also when they use other words. `/ideas-groups` puts ideas that are about the same thing in one group, for example all the ideas for one app. Both come from embeddings: an embedding model turns each idea into a vector, and ideas with similar meaning get similar vectors. The default model is [nomic-embed-text](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5). The design follows [memstate](https://github.com/map588/memstate): the `search_document:` and `search_query:` task prefixes of nomic, one cached vector for each idea that ideamine computes again when the idea changes, cosine similarity with a threshold, and word search when the embedding server does not answer. The groups and the related ideas come from the same vectors, so ideamine needs no graph database.
+
+ideamine sends the text of each new or changed idea to an embedding server that has an OpenAI-compatible `/v1/embeddings` endpoint. Two servers work:
+
+- [Ollama](https://ollama.com) on your machine: `ollama pull nomic-embed-text`. This is the default (`http://127.0.0.1:11434/v1`).
+- The [llama.cpp](https://github.com/ggml-org/llama.cpp) server on another machine, for example a small VPS. The model file is [`nomic-embed-text-v1.5.Q8_0.gguf`](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF) (146 MB). With `-c 512` the server uses about 20 MB of memory plus the model file, which the kernel can page out:
+
+  ```bash
+  llama-server -m nomic-embed-text-v1.5.Q8_0.gguf --embeddings --pooling mean -c 512 -b 512 -ub 512 --alias nomic-embed-text --host 127.0.0.1 --port 8081
+  ```
+
+Then tell ideamine where the server is:
+
+```bash
+ideamine config embed_url http://10.66.0.1/v1
+```
+
+```bash
+ideamine embed
+```
+
+`ideamine embed` embeds the ideas that have no vector yet. It also shows the similarity of each idea to its nearest neighbour, like `memstated embed status`. Use these numbers to set the thresholds for a new model. With nomic-embed-text, a search result must have a similarity of 0.5 or more (`search_threshold`), and the ideas in a group must have a mean similarity of 0.65 or more (`group_threshold`). A group gets a label from the words that its ideas share and other ideas do not use. If the server does not answer, `/ideas-find` searches by words and tells you why, and `/ideas-groups` tells you that it needs the server. The vectors are in `~/.ideamine/vectors.json`. When you delete an idea, its vector goes too.
+
+Claude can search by meaning with `idea_list` and `semantic: true`, and group with `groups: true`.
+
+## Dashboard
+
+`ideamine publish` makes a web page of your ideas: a board with a ticket for each idea, a timeline (a Gantt chart) of how long each idea waited and how long the work took, the groups, and search by meaning. A ticket opens a preview with the brief, the notes, and the related ideas. The page is one static file, `index.html`, and it reads a snapshot, `data.json`. It loads nothing from the internet.
+
+```bash
+ideamine publish http://10.66.0.1/
+```
+
+This uploads both files with HTTP PUT. It also saves the address, so the ideamine hook publishes again in the background after each change, at no model cost. `ideamine publish off` stops that. `ideamine publish --dir <folder>` writes the two files to a folder instead. The timeline uses the time when an idea went to `doing`. ideamine records that time from 0.5.0 on, so for older ideas the timeline shows an estimated bar.
+
+The snapshot contains the full text of your ideas. Serve it only where only you can open it. For example, this nginx site answers only on the address of a WireGuard interface, and it accepts uploads only from one peer:
+
+```nginx
+server {
+    listen 10.66.0.1:80;           # the WireGuard address of the server
+    allow 10.66.0.0/24;            # WireGuard peers only
+    deny all;
+    root /var/www/ideamine;
+    location ~ ^/(index\.html|data\.json)$ {
+        limit_except GET HEAD { allow 10.66.0.2; deny all; }   # only your PC uploads
+        dav_methods PUT;
+        client_max_body_size 16m;
+    }
+    location /v1/ { proxy_pass http://127.0.0.1:8081; }        # the llama.cpp server, for search on the page
+}
+```
+
+`data.json` has `version` (1), `generated`, `embed` (model, query prefix, thresholds, and whether vectors are present), `counts`, `ideas`, and `groups`. Each idea has its ticket key (`IDEA-12`), lane, rank in the queue, triage, times (`created`, `triaged`, `started`, `closed`), timeline `phases`, notes, `group`, `related` ideas with their similarity, and `vec`, the vector as base64 of little-endian float32.
 
 ## Model routing
 
@@ -106,6 +170,11 @@ ideamine next                                     # what to build next
 ideamine go 12                                    # opens Claude Code on the right model, in the idea's project
 ideamine sort                                     # headless triage (see above)
 ideamine watch [off]                              # the watcher (see above)
+ideamine find sync subtitles                      # search by meaning
+ideamine groups [-a]                              # ideas grouped by meaning
+ideamine embed                                    # embed new ideas, show the similarity numbers
+ideamine publish [url|off] [--dir folder]         # the dashboard (see above)
+ideamine config [key [value]]                     # show or change a setting
 ideamine export IDEAS.md                          # Markdown copy of everything
 ```
 
@@ -125,14 +194,21 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 
 ## Where your ideas live
 
-`~/.ideamine/ideas.json` is plain, readable JSON. Set `IDEAMINE_HOME` to move it, for example into a synced folder. Each write takes a lock and then replaces the file in one step, so many sessions can write at the same time without losing an idea. The previous version is kept as `ideas.json.bak`. If the file becomes damaged, ideamine stops and does not overwrite it. Nothing leaves your machine, except when you run triage or a build, which go through Claude as usual. So that it can pair ideas with projects, the triage also sends the paths of your project folders and the first line of each README.
+`~/.ideamine/ideas.json` is plain, readable JSON. Set `IDEAMINE_HOME` to move it, for example into a synced folder. Each write takes a lock and then replaces the file in one step, so many sessions can write at the same time without losing an idea. The previous version is kept as `ideas.json.bak`. If the file becomes damaged, ideamine stops and does not overwrite it. Nothing leaves your machine, except in these cases: triage and builds go through Claude as usual; search by meaning and groups send the text of your ideas to the embedding server that you set; `ideamine publish` uploads a snapshot to the dashboard server that you set. So that it can pair ideas with projects, the triage also sends the paths of your project folders and the first line of each README.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `IDEAMINE_HOME` | `~/.ideamine` | archive location |
-| `IDEAMINE_TRIAGE_MODEL` | `sonnet` | model for the headless triage |
-| `IDEAMINE_CLAUDE_BIN` | `claude` | Claude Code executable |
-| `IDEAMINE_SETTING_SOURCES` | *(empty)* | set to `user` if your login needs `settings.json` (e.g. `apiKeyHelper`) |
+`ideamine config` shows each setting and where its value comes from. `ideamine config <key> <value>` saves a setting in `~/.ideamine/config.json`, and an empty value restores the default. An environment variable wins over the file.
+
+| Variable | Setting | Default | Purpose |
+|---|---|---|---|
+| `IDEAMINE_HOME` | | `~/.ideamine` | archive location |
+| `IDEAMINE_TRIAGE_MODEL` | | `sonnet` | model for the headless triage |
+| `IDEAMINE_CLAUDE_BIN` | | `claude` | Claude Code executable |
+| `IDEAMINE_SETTING_SOURCES` | | *(empty)* | set to `user` if your login needs `settings.json` (e.g. `apiKeyHelper`) |
+| `IDEAMINE_EMBED_URL` | `embed_url` | `http://127.0.0.1:11434/v1` | OpenAI-compatible embeddings API (Ollama, llama.cpp server) |
+| `IDEAMINE_EMBED_MODEL` | `embed_model` | `nomic-embed-text` | embedding model; nomic models get their task prefixes |
+| `IDEAMINE_SEARCH_THRESHOLD` | `search_threshold` | `0.5` | lowest similarity of a search result |
+| `IDEAMINE_GROUP_THRESHOLD` | `group_threshold` | `0.65` | lowest mean similarity in a group, and of a related idea |
+| `IDEAMINE_PUBLISH_URL` | `publish_url` | *(off)* | dashboard server for `ideamine publish` |
 
 ## How it works
 
@@ -146,17 +222,24 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 /ideas-all       ──► Claude ──► MCP idea_list (full) ──► idea_remove for the ideas that fit this chat ──► builds them
 
 watcher on: any prompt ──► hook ──► background pass ──► claude -p (Haiku) ──► verdicts + a project for each idea
+
+/ideas-find, /ideas-groups ──► hook ──► embedding server (new ideas only) ──► cosine similarity ──► answer
+publish on: any prompt after a change ──► hook ──► background publish ──► PUT index.html + data.json
 ```
 
-The plugin contains a Node MCP server with no dependencies, eleven skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
+The plugin contains a Node MCP server with no dependencies, thirteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
 
 ## Development
+
+```bash
+npm install
+```
 
 ```bash
 npm test
 ```
 
-The tests use `node:test` only. They cover the store, including concurrent writers from several processes, the hook, the MCP protocol, headless triage with pairing, and the watcher. Triage runs against a stand-in `claude`, so the tests spend no tokens.
+The tests use `node:test`, and [fast-check](https://fast-check.dev) for the property tests. fast-check is a development dependency only: the plugin itself installs nothing. The tests cover the store, including concurrent writers from several processes, the hook, the MCP protocol, headless triage with pairing, the watcher, embeddings and groups, and the dashboard upload. Triage runs against a stand-in `claude`, and embeddings and uploads run against a stand-in server, so the tests spend no tokens and need no network.
 
 ## License
 

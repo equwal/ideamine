@@ -102,29 +102,42 @@ function renameWithRetry(from, to) {
   }
 }
 
-function save(db) {
-  const file = dbPath();
+/** Replace `file` in one step, so a reader never sees half a file. Call it while you hold the lock. */
+export function writeAtomic(file, text, { backup = false } = {}) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2) + '\n');
-  try {
-    fs.copyFileSync(file, `${file}.bak`);
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
+  fs.writeFileSync(tmp, text);
+  if (backup) {
+    try {
+      fs.copyFileSync(file, `${file}.bak`);
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
   }
   renameWithRetry(tmp, file);
 }
 
-/** Lock, read, apply `fn(db)`, write. Nothing is written if `fn` throws. */
-export function mutate(fn) {
+function save(db) {
+  writeAtomic(dbPath(), JSON.stringify(db, null, 2) + '\n', { backup: true });
+}
+
+/** Run `fn` while this process holds the archive lock. Other files in home() can share the lock. */
+export function withLock(fn) {
   const release = acquireLock();
   try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
+/** Lock, read, apply `fn(db)`, write. Nothing is written if `fn` throws. */
+export function mutate(fn) {
+  return withLock(() => {
     const db = load();
     const result = fn(db);
     save(db);
     return result;
-  } finally {
-    release();
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -332,6 +345,8 @@ export function updateIdea(id, patch = {}) {
       status = STATUS_ALIASES[status] || status;
       if (status === 'reopen' || status === 'open') status = idea.triage ? 'triaged' : 'inbox';
       if (!STATUSES.includes(status)) throw new Error(`status must be one of ${STATUSES.join(', ')}, or reopen`);
+      // The dashboard timeline shows work from the latest start.
+      if (status === 'doing' && idea.status !== 'doing') idea.started = now();
       idea.status = status;
       if (status === 'done' || status === 'dropped') idea.closed = now();
       else delete idea.closed;
