@@ -12,6 +12,9 @@ const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 
 beforeEach(() => {
   process.env.IDEAMINE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ideamine-hook-'));
+  // A pass of the watcher must never reach the real claude or the projects of this machine.
+  process.env.IDEAMINE_CLAUDE_BIN = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));
+  process.env.CLAUDE_CONFIG_DIR = process.env.IDEAMINE_HOME;
 });
 
 /** Run the real hook process the way Claude Code does: JSON on stdin, decision on stdout. */
@@ -90,6 +93,24 @@ test('the board names the dashed commands, and does not send you to a triage', (
   const board = runHook('/ideas').reason;
   for (const tip of [/\/ideas-go/, /\/ideas-all/, /\/ideas-rm N/]) assert.match(board, tip);
   assert.doesNotMatch(board, /\/idea-triage|\/ideas-sort/);
+});
+
+test('/ideas-watch turns the watcher on and off, with no model call', () => {
+  const on = runHook('/ideas-watch');
+  assert.equal(on.decision, 'block');
+  assert.match(on.reason, /^ideamine watch: on since /);
+  assert.match(runHook('/ideas-watch').reason, /^ideamine watch: on since /);
+  assert.match(runHook('/ideamine:ideas-watch off').reason, /^ideamine watch: off/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(store.home(), 'watch.json'), 'utf8')).on, false);
+});
+
+test('while the watcher is on, a saved idea is triaged in the background', async () => {
+  runHook('/ideas-watch');
+  runHook('/idea make the scroller faster');
+  // The hook returns at once. A separate process triages the idea with the stand-in claude.
+  const deadline = Date.now() + 20000;
+  while (store.load().ideas[0].status === 'inbox' && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+  assert.equal(store.findIdea(store.load(), 1).triage?.by, 'haiku (headless)');
 });
 
 test('handlePrompt filters by project with "here"', () => {

@@ -1,5 +1,7 @@
 // Stand-in for the Claude Code CLI: returns a verdict for every idea in the prompt and records how
-// it was called, so tests can check flags and environment without spending tokens.
+// it was called, so tests can check flags and environment without spending tokens. It pairs an
+// idea with a listed project when the idea names that project. It answers with the folder path,
+// or with the project name when FAKE_CLAUDE_ANSWER=name (as Haiku did).
 import fs from 'node:fs';
 
 let input = '';
@@ -7,13 +9,22 @@ for await (const chunk of process.stdin) input += chunk;
 
 if (process.env.FAKE_CLAUDE_LOG) {
   const env = {};
-  for (const key of ['CLAUDECODE', 'CLAUDE_EFFORT', 'CLAUDE_CODE_MESSAGING_SOCKET', 'ANTHROPIC_BASE_URL']) env[key] = process.env[key] ?? null;
+  for (const key of ['CLAUDECODE', 'CLAUDE_EFFORT', 'CLAUDE_CODE_MESSAGING_SOCKET', 'ANTHROPIC_BASE_URL', 'MAX_THINKING_TOKENS']) {
+    env[key] = process.env[key] ?? null;
+  }
   fs.writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args: process.argv.slice(2), env, input }));
 }
 
-const ids = [...(input.split('Ideas to triage')[1] || '').matchAll(/^#(\d+)/gm)].map((m) => Number(m[1]));
-const verdicts = ids.map((id, i) => ({
-  id,
+// Each project line is "name: folder" or "name: folder — what the README says".
+const projects = (input.split('Projects on this machine:\n')[1] || '')
+  .split('\n\n')[0]
+  .split('\n')
+  .filter(Boolean)
+  .map((line) => ({ name: line.slice(0, line.indexOf(': ')), dir: line.slice(line.indexOf(': ') + 2).split(' — ')[0] }));
+const answer = (p) => (p ? (process.env.FAKE_CLAUDE_ANSWER === 'name' ? p.name : p.dir) : '');
+const ideas = [...(input.split('Ideas to triage')[1] || '').matchAll(/^#(\d+)(?: \[[^\]]*\])?: (.*)$/gm)];
+const verdicts = ideas.map(([, id, text], i) => ({
+  id: Number(id),
   verdict: i === 2 ? 'skip' : 'do',
   impact: 3,
   size: 's',
@@ -21,6 +32,7 @@ const verdicts = ids.map((id, i) => ({
   title: `Idea ${id}`,
   why: 'test',
   brief: `Build ${id}.`,
+  project: answer(projects.find((p) => text.toLowerCase().includes(p.name.toLowerCase()))),
 }));
 
 process.stdout.write(JSON.stringify({

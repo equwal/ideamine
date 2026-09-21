@@ -1,7 +1,8 @@
 // Plain-text views. Kept compact on purpose: every character here may end up in a model's context.
 
 import path from 'node:path';
-import { counts, lane, listIdeas, samePath } from './store.js';
+import { samePath } from './projects.js';
+import { counts, lane, listIdeas } from './store.js';
 import { clip } from './text.js';
 
 const LANE_TITLES = {
@@ -18,7 +19,7 @@ function projectName(p) {
   return p ? path.basename(p) : '';
 }
 
-function stamp(iso) {
+export function stamp(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   const pad = (n) => String(n).padStart(2, '0');

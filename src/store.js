@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { findProject, samePath } from './projects.js';
 import { clip, deriveTitle, extractTags, isSimilar, normalizeTags, wordSet } from './text.js';
 
 export const VERDICTS = ['do', 'maybe', 'skip'];
@@ -128,15 +129,6 @@ export function mutate(fn) {
 
 // ---------------------------------------------------------------------------------------------
 // Queries
-
-export function samePath(a, b) {
-  if (!a || !b) return false;
-  const norm = (p) => {
-    const r = path.resolve(p).replace(/[\\/]+$/, '');
-    return process.platform === 'win32' ? r.toLowerCase() : r;
-  };
-  return norm(a) === norm(b);
-}
 
 export function findIdea(db, id) {
   const n = Number(String(id).replace(/^#/, ''));
@@ -279,8 +271,12 @@ function cleanVerdict(v) {
   };
 }
 
-/** Save triage verdicts. Bad items are reported individually instead of failing the batch. */
-export function applyTriage(verdicts, { by = null } = {}) {
+/**
+ * Save triage verdicts. Bad items are reported individually instead of failing the batch.
+ * `projects` are the folders that the triage could pair ideas with (from knownProjects). A verdict
+ * that names one of them moves its idea there.
+ */
+export function applyTriage(verdicts, { by = null, projects = null } = {}) {
   if (!Array.isArray(verdicts) || !verdicts.length) throw new Error('no verdicts given');
   return mutate((db) =>
     verdicts.map((v) => {
@@ -292,14 +288,22 @@ export function applyTriage(verdicts, { by = null } = {}) {
       } catch (e) {
         return { id: idea.id, error: e.message };
       }
-      idea.triage = { ...t, at: now(), ...(by ? { by } : {}) };
+      idea.triage = { ...t, at: now(), ...(by ? { by } : {}), ...(projects ? { paired: true } : {}) };
       if (v.title) idea.title = clip(v.title, 90);
       if (Array.isArray(v.tags)) idea.tags = normalizeTags([...(idea.tags || []), ...v.tags]);
       const dup = Number(v.dup_of);
       if (dup && dup !== idea.id && findIdea(db, dup)) idea.dup_of = dup;
+      const target = projects && findProject(projects, v.project);
+      let moved = null;
+      if (target && !samePath(target.dir, idea.project)) {
+        idea.notes ||= [];
+        idea.notes.push({ at: now(), text: `paired with ${target.dir} (was ${idea.project || 'no folder'})` });
+        idea.project = target.dir;
+        moved = target.dir;
+      }
       if (idea.status === 'inbox') idea.status = 'triaged';
       idea.updated = now();
-      return { id: idea.id, verdict: t.verdict, model: t.model, size: t.size, title: idea.title };
+      return { id: idea.id, verdict: t.verdict, model: t.model, size: t.size, title: idea.title, ...(moved ? { moved } : {}) };
     }),
   );
 }

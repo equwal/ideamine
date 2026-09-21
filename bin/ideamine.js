@@ -16,6 +16,8 @@ const HELP = `ideamine: an idea inbox for Claude Code
   ideamine go [id] [--print]      open Claude Code on the idea's recommended model, in its project
   ideamine sort [--model sonnet] [--limit 20] [--dry-run]
                                   triage the inbox with one headless \`claude -p\` call
+  ideamine watch [off]            the watcher: Haiku triages new ideas and pairs them with projects
+  ideamine watch-pass             one pass of the watcher, now, in the foreground
   ideamine export [file.md]       Markdown export of the whole archive
   ideamine path                   where the archive lives (override with IDEAMINE_HOME)
   ideamine mcp                    run the MCP server on stdio
@@ -152,6 +154,21 @@ async function main() {
       console.log(`Triaged ${ok.length}${spend}:`);
       for (const r of ok) console.log(`  #${r.id} ${r.verdict.padEnd(5)} ${r.verdict === 'skip' ? '' : `${r.model.padEnd(6)} ${r.size.toUpperCase().padEnd(2)} `}${clip(r.title, 60)}`);
       for (const r of out.results.filter((x) => x.error)) console.log(`  #${r.id} not saved: ${r.error}`);
+      break;
+    }
+    case 'watch': {
+      const watch = await import('../src/watch.js');
+      if (words[0] === 'off') watch.turnOff();
+      else {
+        watch.turnOn();
+        watch.kick();
+      }
+      console.log(watch.status());
+      break;
+    }
+    case 'watch-pass': {
+      const watch = await import('../src/watch.js');
+      if ((await watch.pass()) === 'error') process.exitCode = 1;
       break;
     }
     case 'export': {

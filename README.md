@@ -45,15 +45,27 @@ Marketplaces you add yourself do not auto-update. To upgrade, run `claude plugin
 | `/ideas-go [12]` | Build the idea that fits this chat, else the first in the queue, or #12, on its recommended model. New ideas are triaged first. | Yes, this is the build |
 | `/ideas-all` | Claude reads every idea, takes the ones that fit this chat out of the queue, and does them. The others stay in the queue. | Yes, this is the build |
 | `/ideas-sort` | Triage the inbox now and show the queue. You do not have to: `/ideas-go` triages when it must. | Yes, briefly |
+| `/ideas-watch [off]` | Turn on the watcher: Haiku triages each new idea and pairs it with its project, in the background. With no argument, it also shows what the watcher did. | Haiku, only for new ideas |
 | `/ideas <question>` | Ask about your ideas, e.g. "which ones fit in an hour?" | Yes, briefly |
 
 Each command has its own name, so the slash menu shows all of them when you type `/idea`. The plugin menu also shows them as `/ideamine:ideas-go` and so on. Both forms work.
 
 `/ideas-go` does not ask questions. The queue puts the best `do` ideas first, then the best `maybe` ideas. Ideas that the triage marks `skip` stay out of the queue until you reopen or delete them.
 
-You save ideas from any session, so the project that ideamine records is only the folder you were in. That can be a scratch folder that is gone. For this reason, `/ideas-go` and `/ideas-all` let Claude judge by the text which ideas fit the current chat, and where to build each one. `/ideas-go` builds in the current project when the idea fits it. Else it uses the recorded folder if that folder exists, or finds the project that the idea is about. If it cannot find the project, it stops and tells you.
+You save ideas from any session, so the folder that ideamine records is only the folder you were in. That can be the scratch folder of another chat. For this reason, the triage pairs each idea with the project that it is about (see [The watcher](#the-watcher)), and `/ideas-go` and `/ideas-all` let Claude judge by the text which ideas fit the current chat, and where to build each one. `/ideas-go` builds in the current project when the idea fits it. Else it uses the recorded folder if that folder exists, or finds the project that the idea is about. If it cannot find the project, it stops and tells you.
 
 Claude can also save ideas by itself. If you write "idea: dark mode for the popup" or "save that for later", it calls the `idea_add` tool and continues the current task.
+
+## The watcher
+
+```
+> /ideas-watch
+  ideamine watch: on since 2026-09-21 14:02. haiku triages new ideas and pairs each one with its project.
+```
+
+Run `/ideas-watch` once. After that, a few seconds after you save an idea, Haiku (the cheapest model) triages it and pairs it with its project. The triage chooses from the folders of your ideas and the projects that Claude Code knows (`~/.claude.json`), and it reads the first line of each README. If no project fits, for example for an idea for a new product, the idea stays where you saved it. The first pass also triages again the open ideas from before 0.4.0, so that they get a project too.
+
+The watcher is not a process that stays alive, because a process like that can stop: a crash, a reboot, a full context, or a usage limit. Instead, the ideamine hook starts a short background pass when you send a prompt and there is work. Thus the watcher keeps going while you use Claude Code, and it costs nothing while no new ideas come in. A failed call gets 2 more tries in the same pass. After a failed pass, the watcher waits 10 minutes before it tries again. `/ideas-watch` shows the last passes, and `/ideas-watch off` turns the watcher off. In a terminal, `ideamine watch` does the same. The log is `~/.ideamine/watch.log`.
 
 ## Model routing
 
@@ -93,6 +105,7 @@ ideamine done 12 "shipped in v1.4"                # also: drop, start, reopen, n
 ideamine next                                     # what to build next
 ideamine go 12                                    # opens Claude Code on the right model, in the idea's project
 ideamine sort                                     # headless triage (see above)
+ideamine watch [off]                              # the watcher (see above)
 ideamine export IDEAS.md                          # Markdown copy of everything
 ```
 
@@ -112,7 +125,7 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 
 ## Where your ideas live
 
-`~/.ideamine/ideas.json` is plain, readable JSON. Set `IDEAMINE_HOME` to move it, for example into a synced folder. Each write takes a lock and then replaces the file in one step, so many sessions can write at the same time without losing an idea. The previous version is kept as `ideas.json.bak`. If the file becomes damaged, ideamine stops and does not overwrite it. Nothing leaves your machine, except when you run triage or a build, which go through Claude as usual.
+`~/.ideamine/ideas.json` is plain, readable JSON. Set `IDEAMINE_HOME` to move it, for example into a synced folder. Each write takes a lock and then replaces the file in one step, so many sessions can write at the same time without losing an idea. The previous version is kept as `ideas.json.bak`. If the file becomes damaged, ideamine stops and does not overwrite it. Nothing leaves your machine, except when you run triage or a build, which go through Claude as usual. So that it can pair ideas with projects, the triage also sends the paths of your project folders and the first line of each README.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -131,9 +144,11 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
                                               ──► verdict · impact · size · cheapest capable model · brief
                             ──► subagent on that model ──► builds it ──► idea_update: done
 /ideas-all       ──► Claude ──► MCP idea_list (full) ──► idea_remove for the ideas that fit this chat ──► builds them
+
+watcher on: any prompt ──► hook ──► background pass ──► claude -p (Haiku) ──► verdicts + a project for each idea
 ```
 
-The plugin contains a Node MCP server with no dependencies, ten skills (the slash commands), and one hook. The hook ignores every prompt except `/idea`, `/ideas`, and the local `/ideas-*` commands, and those end before any API call. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
+The plugin contains a Node MCP server with no dependencies, eleven skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
 
 ## Development
 
@@ -141,7 +156,7 @@ The plugin contains a Node MCP server with no dependencies, ten skills (the slas
 npm test
 ```
 
-The tests use `node:test` only. They cover the store, including concurrent writers from several processes, the hook, the MCP protocol, and headless triage. Triage runs against a stand-in `claude`, so the tests spend no tokens.
+The tests use `node:test` only. They cover the store, including concurrent writers from several processes, the hook, the MCP protocol, headless triage with pairing, and the watcher. Triage runs against a stand-in `claude`, so the tests spend no tokens.
 
 ## License
 

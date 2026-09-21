@@ -10,6 +10,16 @@ const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 
 beforeEach(() => {
   process.env.IDEAMINE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ideamine-cli-'));
+  process.env.IDEAMINE_CLAUDE_BIN = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));
+  process.env.CLAUDE_CONFIG_DIR = process.env.IDEAMINE_HOME;
+});
+
+test('ideamine watch turns the watcher on and off, and watch-pass runs one pass', () => {
+  assert.match(cli('watch').out, /^ideamine watch: on since /);
+  assert.equal(cli('add', 'one').code, 0);
+  assert.equal(cli('watch-pass').code, 0);
+  assert.match(cli('cat', '1').out, /triaged .* by haiku \(headless\)/);
+  assert.match(cli('watch', 'off').out, /^ideamine watch: off/);
 });
 
 function cli(...args) {

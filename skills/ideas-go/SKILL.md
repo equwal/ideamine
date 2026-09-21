@@ -8,7 +8,7 @@ allowed-tools: mcp__plugin_ideamine_ideamine__idea_next, mcp__plugin_ideamine_id
 
 Build one idea with the model recommended for it. Requested idea: $ARGUMENTS (empty means the next idea in the queue). Do not ask the user anything.
 
-The user saves ideas from any session. Thus the project that an idea records is only the folder the user was in, and that folder can be wrong or gone. Judge by the text of the idea which idea fits this chat, and where it belongs.
+The user saves ideas from any session. The triage pairs each idea with its project folder when one fits. Else the project of an idea is only the folder where the user saved it, and that folder can be wrong or gone. Judge by the text of the idea which idea fits this chat, and where it belongs.
 
 1. Call `idea_next` with `triage: true`. Pass `id` if an id is given. The tool triages new ideas first. If it says that the queue is empty, say so in one line and stop. If the triage failed and no idea came back, call `idea_triage` with no verdicts, judge those ideas, save all verdicts in ONE `idea_triage` call with your model name as `by`, and then call `idea_next` again.
 2. If no id is given, the tool also returns the whole queue. If an idea in the queue clearly fits this chat (the current project or this conversation), call `idea_next` with its `id`, and build that idea. Else build the first idea.

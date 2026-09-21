@@ -1,6 +1,7 @@
 // Running the Claude Code CLI from ideamine: headless triage, and launching a session to build an idea.
 
 import { spawn, spawnSync } from 'node:child_process';
+import { knownProjects } from './projects.js';
 import { BATCH_SCHEMA, pendingIdeas, triagePrompt } from './rubric.js';
 import { applyTriage, counts, findIdea, load, normalizeModel } from './store.js';
 
@@ -47,10 +48,10 @@ function parseLooseJson(text) {
   }
 }
 
-function run(args, input, timeoutMs) {
+function run(args, input, timeoutMs, env = {}) {
   const [bin, argv] = command(args);
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, argv, { env: childEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, argv, { env: { ...childEnv(), ...env }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill(), timeoutMs);
@@ -72,7 +73,7 @@ function run(args, input, timeoutMs) {
  * Triage the inbox with a one-shot `claude -p` call: no tools, no MCP servers, no settings, a
  * two-line system prompt, and JSON-schema output. Runs on the user's normal Claude Code login and
  * costs about 400 tokens per idea, whatever model the calling session uses. `ids` triages those
- * ideas instead of the inbox.
+ * ideas instead of the inbox. The triage also pairs each idea with a project folder of this machine.
  */
 export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL || 'sonnet', ids = null, limit = 20, dryRun = false, budget = 1 } = {}) {
   const alias = normalizeModel(model) || model;
@@ -80,7 +81,8 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
   const pending = pendingIdeas(db, { ids, limit });
   if (!pending.length) return { message: 'Nothing to triage: the inbox is empty.' };
 
-  const prompt = `${triagePrompt(db, pending)}\n\nReturn one verdict for every idea listed above.`;
+  const projects = knownProjects(db);
+  const prompt = `${triagePrompt(db, pending, projects)}\n\nReturn one verdict for every idea listed above.`;
   // Skipping settings drops hooks, plugins, and skill listings: ~4k fewer input tokens per call.
   // Set IDEAMINE_SETTING_SOURCES=user if your login depends on settings.json (apiKeyHelper, env).
   const args = [
@@ -96,12 +98,16 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
     '--system-prompt', 'You triage a developer\'s backlog of ideas. Follow the rubric exactly and answer only with the requested JSON.',
   ];
   if (alias !== 'haiku') args.push('--effort', 'low');
+  // Haiku takes no effort setting. Its thinking was about 70% of its output tokens and did not change
+  // the verdicts, so it gets no thinking.
+  const env = alias === 'haiku' ? { MAX_THINKING_TOKENS: '0' } : {};
   if (dryRun) {
     const shown = args.map((a) => (/[\s"{]/.test(a) || !a ? JSON.stringify(a) : a)).join(' ');
-    return { message: `${claudeBin()} ${shown}\n\n${prompt}` };
+    const vars = Object.entries(env).map(([k, v]) => `${k}=${v} `).join('');
+    return { message: `${vars}${claudeBin()} ${shown}\n\n${prompt}` };
   }
 
-  const res = await run(args, prompt, 5 * 60 * 1000);
+  const res = await run(args, prompt, 5 * 60 * 1000, env);
   let out;
   try {
     out = JSON.parse(res.stdout);
@@ -112,7 +118,7 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
   if (out.is_error) throw new Error(`claude: ${out.result || out.subtype || 'error'}`);
   const data = out.structured_output ?? parseLooseJson(out.result);
   if (!Array.isArray(data?.verdicts)) throw new Error('claude answered without verdicts');
-  const results = applyTriage(data.verdicts, { by: `${alias} (headless)` });
+  const results = applyTriage(data.verdicts, { by: `${alias} (headless)`, projects });
   const u = out.usage || {};
   const input = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
   return { results, model: alias, cost: out.total_cost_usd, tokens: { input, output: u.output_tokens || 0 } };

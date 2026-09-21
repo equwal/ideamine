@@ -2,9 +2,11 @@
 // runs straight from a git checkout with nothing to install.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { headlessTriage, triageFirst } from './claude.js';
+import { knownProjects } from './projects.js';
 import { renderAdded, renderBoard, renderIdea } from './render.js';
 import { BATCH_SCHEMA, MODELS, pendingIdeas, triagePrompt } from './rubric.js';
 import {
@@ -159,6 +161,7 @@ const PROMPTS = [
   { name: 'ideas-go', description: 'Build the next idea on its recommended model', arguments: [{ name: 'id', required: false }] },
   { name: 'ideas-all', description: 'Do every idea that fits this chat', arguments: [] },
   { name: 'ideas-sort', description: 'Triage the inbox now and show the queue', arguments: [] },
+  { name: 'ideas-watch', description: 'Turn the background watcher on or off', arguments: [{ name: 'off', required: false }] },
 ];
 
 function skillBody(name, args) {
@@ -171,7 +174,10 @@ function summarizeTriage(results, how = '') {
   const ok = results.filter((r) => !r.error);
   const tally = ['do', 'maybe', 'skip'].map((v) => `${ok.filter((r) => r.verdict === v).length} ${v}`).join(' · ');
   const lines = [`Saved ${ok.length} verdict${ok.length === 1 ? '' : 's'}: ${tally}${how ? ` (${how})` : ''}`];
-  for (const r of ok) lines.push(`  #${r.id} ${r.verdict}${r.verdict === 'skip' ? '' : ` · ${r.model} · ${r.size.toUpperCase()}`}  ${clip(r.title, 60)}`);
+  for (const r of ok) {
+    const meta = r.verdict === 'skip' ? '' : ` · ${r.model} · ${r.size.toUpperCase()}`;
+    lines.push(`  #${r.id} ${r.verdict}${meta}  ${clip(r.title, 60)}${r.moved ? `  → ${path.basename(r.moved)}` : ''}`);
+  }
   for (const r of results.filter((x) => x.error)) lines.push(`  #${r.id} not saved: ${r.error}`);
   const left = counts(load()).inbox;
   if (left) lines.push(`${left} still in inbox.`);
@@ -216,16 +222,17 @@ const handlers = {
       return withBoard(headlessSummary(await headlessTriage({ model, limit: limit || 20 })));
     }
     if (Array.isArray(verdicts) && verdicts.length) {
-      return withBoard(summarizeTriage(applyTriage(verdicts, { by: by ? clip(by, 40) : 'claude' })));
+      const projects = knownProjects(load());
+      return withBoard(summarizeTriage(applyTriage(verdicts, { by: by ? clip(by, 40) : 'claude', projects })));
     }
     limit ||= 30;
     const db = load();
     const pending = pendingIdeas(db, { ids, limit });
     if (!pending.length) return 'Nothing to triage: the inbox is empty.';
     return (
-      triagePrompt(db, pending) +
+      triagePrompt(db, pending, knownProjects(db)) +
       '\n\nSave every verdict in ONE idea_triage call: ' +
-      '{"verdicts":[{"id":1,"verdict":"do","impact":3,"size":"s","model":"sonnet","title":"...","why":"...","brief":"..."}]}'
+      '{"verdicts":[{"id":1,"verdict":"do","impact":3,"size":"s","model":"sonnet","title":"...","why":"...","brief":"...","project":"..."}]}'
     );
   },
 

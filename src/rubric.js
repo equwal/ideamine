@@ -49,6 +49,12 @@ ${MODELS.map((m) => `    ${m.alias.padEnd(6)} ${m.price.padEnd(7)} ${m.use}`).jo
 - brief: 1-4 sentences an agent can act on without this conversation: goal, scope, and "done when". Leave empty for skip.
 - dup_of: id of an existing idea this one duplicates (use verdict "skip"), if any`;
 
+// Only when there are projects to choose from.
+const PAIRING =
+  '- project: the name (the word before the colon) of the project in "Projects on this machine" that the idea is ' +
+  'about. The user saves ideas from any chat, so the folder where an idea was saved often has nothing to do with it. ' +
+  '"" if no project fits, for example an idea for a new product.';
+
 /** JSON Schema for a batch of verdicts; used for `claude -p --json-schema` and the MCP tool. */
 export const VERDICT_SCHEMA = {
   type: 'object',
@@ -62,6 +68,7 @@ export const VERDICT_SCHEMA = {
     why: { type: 'string' },
     brief: { type: 'string' },
     dup_of: { type: 'integer' },
+    project: { type: 'string' },
   },
   required: ['id', 'verdict', 'impact', 'size', 'model', 'title', 'why', 'brief'],
 };
@@ -81,15 +88,20 @@ export function pendingIdeas(db, { ids = null, limit = 30 } = {}) {
   return listIdeas(db, { filter: 'inbox' }).reverse().slice(0, limit); // oldest first
 }
 
-/** The rubric plus the ideas to judge, as one prompt. */
-export function triagePrompt(db, pending) {
+/** The rubric plus the ideas to judge, as one prompt. `projects` (from knownProjects) turns on pairing. */
+export function triagePrompt(db, pending, projects = []) {
   const pendingIds = new Set(pending.map((i) => i.id));
   const existing = db.ideas
     .filter((i) => !pendingIds.has(i.id) && ['do', 'maybe', 'doing', 'done'].includes(lane(i)))
     .slice(-60)
     .map((i) => `#${i.id} ${clip(i.title, 70)} (${lane(i)})`);
-  const lines = [RUBRIC, ''];
+  const lines = [RUBRIC];
+  if (projects.length) lines.push(PAIRING);
+  lines.push('');
   if (existing.length) lines.push('Existing ideas, for duplicate checks:', ...existing, '');
+  if (projects.length) {
+    lines.push('Projects on this machine:', ...projects.map((p) => `${p.name}: ${p.dir}${p.about ? ` — ${p.about}` : ''}`), '');
+  }
   lines.push(`Ideas to triage (${pending.length}):`);
   for (const i of pending) {
     const ctx = [i.project && `project: ${path.basename(i.project)}`, i.tags?.length && `tags: ${i.tags.join(', ')}`]

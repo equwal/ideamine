@@ -1,11 +1,13 @@
 // UserPromptSubmit hook: answers /idea, /ideas, and the local /ideas-* commands (ls, cat, rm, done,
-// reopen) and blocks the prompt, so the model is never called. That makes capture free, instant,
-// and possible even when the session is out of usage. Every other prompt passes through untouched,
-// including /ideas-go, /ideas-all, /ideas-sort, and questions, which their skills answer.
+// reopen, watch) and blocks the prompt, so the model is never called. That makes capture free,
+// instant, and possible even when the session is out of usage. Every other prompt passes through
+// untouched, including /ideas-go, /ideas-all, /ideas-sort, and questions, which their skills answer.
+// After each prompt, the hook lets the watcher start a background pass when there is work.
 
 import { renderAdded, renderBoard, renderIdea } from './render.js';
 import { addIdeas, FILTERS, findIdea, lane, load, removeIdeas, updateIdea } from './store.js';
 import { clip, splitIdeas } from './text.js';
+import * as watch from './watch.js';
 
 // `/idea ...`, `/ideas ...`, `/ideas-<verb> ...`, and the plugin-qualified `/ideamine:...` forms.
 // Each verb is a separate skill with a dash, so that the slash menu shows it.
@@ -22,7 +24,8 @@ const USAGE = `Usage: /idea <text>                add an idea (a bulleted list a
 These call the model:
        /ideas-go [N]                build the next idea, or #N, on its model. New ideas are triaged first.
        /ideas-all                   do every idea that fits this chat. The others stay in the queue.
-       /ideas-sort                  triage the inbox now and show the queue`;
+       /ideas-sort                  triage the inbox now and show the queue
+       /ideas-watch [off]           Haiku triages new ideas and pairs them with projects, in the background`;
 
 const noIdea = (ids) => `No idea ${ids.map((id) => `#${String(id).replace(/^#/, '')}`).join(', ')}.`;
 
@@ -48,6 +51,13 @@ export function handlePrompt(prompt, { cwd = process.cwd(), session = null } = {
     if (!arg) return USAGE;
     const results = addIdeas(splitIdeas(arg), { source: 'hook', project: cwd, session });
     return renderAdded(results, load());
+  }
+
+  if (command === 'ideas-watch') {
+    if (!arg) watch.turnOn();
+    else if (/^off$/i.test(arg)) watch.turnOff();
+    else return null;
+    return watch.status(); // runHook starts the first pass after this
   }
 
   const words = arg.split(/\s+/).filter(Boolean);
@@ -91,7 +101,7 @@ export async function runHook() {
   } catch {
     return; // not a hook payload; stay out of the way
   }
-  let message;
+  let message = null;
   try {
     message = handlePrompt(typeof input?.prompt === 'string' ? input.prompt : '', {
       cwd: input.cwd || process.cwd(),
@@ -100,14 +110,20 @@ export async function runHook() {
   } catch (e) {
     // Never swallow the user's text: let the prompt through so the /idea skill can save it via MCP.
     process.stderr.write(`ideamine: ${e.message}\n`);
-    return;
   }
-  if (message == null) return;
-  // Blocking ends the turn before any API request. suppressOriginalPrompt keeps Claude Code from
-  // echoing the command back under our message.
-  process.stdout.write(JSON.stringify({
-    decision: 'block',
-    reason: message,
-    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', suppressOriginalPrompt: true },
-  }));
+  if (message != null) {
+    // Blocking ends the turn before any API request. suppressOriginalPrompt keeps Claude Code from
+    // echoing the command back under our message.
+    process.stdout.write(JSON.stringify({
+      decision: 'block',
+      reason: message,
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', suppressOriginalPrompt: true },
+    }));
+  }
+  // Each prompt lets the watcher catch up, so it keeps going while it is on.
+  try {
+    watch.kick();
+  } catch {
+    // The watcher must never stop a prompt.
+  }
 }
