@@ -60,6 +60,14 @@ test('haiku gets no effort flag, and an empty inbox makes no call', async () => 
   assert.ok(!call.args.includes('--effort'));
 });
 
+test('headless triage of given ids judges only those ideas', async () => {
+  store.addIdeas(['one', 'two', 'three']);
+  const out = await headlessTriage({ ids: [3] });
+  assert.deepEqual(out.results.map((r) => r.id), [3]);
+  assert.deepEqual(store.load().ideas.map((i) => i.status), ['inbox', 'inbox', 'triaged']);
+  assert.match(JSON.parse(fs.readFileSync(log, 'utf8')).input, /Ideas to triage \(1\):\n#3: three\n/);
+});
+
 test('a missing CLI gives a clear error', async () => {
   store.addIdeas(['one']);
   process.env.IDEAMINE_CLAUDE_BIN = path.join(os.tmpdir(), 'definitely-not-claude-xyz');

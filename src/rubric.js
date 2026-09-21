@@ -1,5 +1,5 @@
 // How ideas are judged and which model builds them. Both triage paths (the MCP tool used by
-// /idea-triage and the headless `ideamine triage`) read this file.
+// /ideas go and /ideas sort, and the headless `ideamine sort`) read this file.
 
 import path from 'node:path';
 import { lane, listIdeas } from './store.js';

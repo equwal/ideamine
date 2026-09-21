@@ -202,14 +202,19 @@ export function counts(db) {
   return c;
 }
 
-/** Best idea to build next: verdict "do", not started, current project first, then value per effort. */
+const READY_LANES = ['do', 'maybe'];
+
+/**
+ * Best idea to build next: verdict "do" before "maybe", not started, current project first, then
+ * value per effort. A "maybe" idea is still in the queue, so /ideas go builds it when no "do" is left.
+ */
 export function pickNext(db, { project = null, only = false } = {}) {
-  let ready = db.ideas.filter((i) => lane(i) === 'do');
+  let ready = db.ideas.filter((i) => READY_LANES.includes(lane(i)));
   if (only) ready = ready.filter((i) => samePath(i.project, project));
   ready.sort((a, b) => {
     const pa = project && samePath(a.project, project) ? 1 : 0;
     const pb = project && samePath(b.project, project) ? 1 : 0;
-    return pb - pa || priority(b) - priority(a) || a.id - b.id;
+    return READY_LANES.indexOf(lane(a)) - READY_LANES.indexOf(lane(b)) || pb - pa || priority(b) - priority(a) || a.id - b.id;
   });
   return ready[0] || null;
 }
@@ -297,6 +302,19 @@ export function applyTriage(verdicts, { by = null } = {}) {
       return { id: idea.id, verdict: t.verdict, model: t.model, size: t.size, title: idea.title };
     }),
   );
+}
+
+/** Delete ideas for good and return them. An unknown id is an error, and then nothing is deleted. */
+export function removeIdeas(ids) {
+  return mutate((db) => {
+    const gone = ids.map((id) => {
+      const idea = findIdea(db, id);
+      if (!idea) throw new Error(`no idea #${String(id).replace(/^#/, '')}`);
+      return idea;
+    });
+    db.ideas = db.ideas.filter((i) => !gone.includes(i));
+    return [...new Set(gone)];
+  });
 }
 
 const STATUS_ALIASES = { start: 'doing', started: 'doing', finish: 'done', finished: 'done', drop: 'dropped' };

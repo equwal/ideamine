@@ -29,6 +29,51 @@ test('add, triage, and list ideas by lane and priority', () => {
   assert.deepEqual(store.counts(db), { inbox: 1, do: 2, maybe: 0, skip: 1, doing: 0, done: 0, dropped: 0, open: 3 });
 });
 
+test('pickNext takes the best "do" idea, else the best "maybe", and never an idea from another lane', () => {
+  // Every combination of lanes, so that no lane can get into or out of the queue unseen.
+  const LANES = ['do', 'maybe', 'skip', 'inbox', 'doing', 'done', 'dropped'];
+  const VERDICTS = ['do', 'maybe', 'skip'];
+  const make = (lane, id) => ({
+    id,
+    title: lane,
+    status: VERDICTS.includes(lane) ? 'triaged' : lane,
+    triage: lane === 'inbox' ? null : { verdict: VERDICTS.includes(lane) ? lane : 'do', impact: 3, size: 'm', model: 'sonnet' },
+  });
+  for (let mask = 0; mask < 1 << LANES.length; mask++) {
+    const present = LANES.filter((_, bit) => mask & (1 << bit));
+    const db = { ideas: present.map((lane, i) => make(lane, i + 1)) };
+    const want = present.includes('do') ? 'do' : present.includes('maybe') ? 'maybe' : null;
+    assert.equal(store.pickNext(db)?.title ?? null, want, `lanes: ${present.join(', ')}`);
+  }
+
+  // The verdict counts before the project: a "do" idea elsewhere beats a "maybe" idea here.
+  const db = {
+    ideas: [
+      { id: 1, status: 'triaged', project: '/here', triage: { verdict: 'maybe', impact: 5, size: 'xs', model: 'haiku' } },
+      { id: 2, status: 'triaged', project: '/there', triage: { verdict: 'do', impact: 1, size: 'xl', model: 'opus' } },
+    ],
+  };
+  assert.equal(store.pickNext(db, { project: '/here' }).id, 2);
+});
+
+test('regression: after a triage of "0 do · 1 maybe · 1 skip", /ideas go still has an idea to build', () => {
+  store.addIdeas(['tes', 'redesign the AssistKey UI for a premium e-ink feel']);
+  store.applyTriage([
+    { id: 1, verdict: 'skip', impact: 1, size: 'xs', model: 'haiku', title: "Clarify vague 'tes' idea", why: 'w', brief: '' },
+    { id: 2, verdict: 'maybe', impact: 3, size: 'l', model: 'opus', title: 'Redesign AssistKey UI', why: 'w', brief: 'b' },
+  ]);
+  assert.equal(store.pickNext(store.load()).id, 2);
+});
+
+test('removeIdeas deletes ideas for good, all or nothing, and never reuses an id', () => {
+  store.addIdeas(['one', 'two', 'three']);
+  assert.throws(() => store.removeIdeas([1, 99]), /no idea #99/);
+  assert.equal(store.load().ideas.length, 3); // an unknown id deletes nothing
+  assert.deepEqual(store.removeIdeas(['#2', 3, '3']).map((i) => i.id), [2, 3]);
+  assert.deepEqual(store.load().ideas.map((i) => i.id), [1]);
+  assert.equal(store.addIdeas(['four'])[0].idea.id, 4);
+});
+
 test('bad verdicts are reported per item, not fatal', () => {
   store.addIdeas(['one']);
   const res = store.applyTriage([{ id: 1, verdict: 'yes' }, { id: 99, verdict: 'do' }]);

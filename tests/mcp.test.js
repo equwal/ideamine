@@ -49,9 +49,9 @@ before(async () => {
 
 after(() => server.kill());
 
-test('lists the five tools with schemas', async () => {
+test('lists the six tools with schemas', async () => {
   const res = await request('tools/list');
-  assert.deepEqual(res.result.tools.map((t) => t.name), ['idea_add', 'idea_list', 'idea_triage', 'idea_update', 'idea_next']);
+  assert.deepEqual(res.result.tools.map((t) => t.name), ['idea_add', 'idea_list', 'idea_triage', 'idea_update', 'idea_next', 'idea_remove']);
   for (const t of res.result.tools) assert.equal(t.inputSchema.type, 'object');
 });
 
@@ -107,10 +107,45 @@ test('tool errors come back as isError results, not protocol errors', async () =
 
 test('prompts mirror the skills', async () => {
   const list = await request('prompts/list');
-  assert.deepEqual(list.result.prompts.map((p) => p.name), ['idea', 'ideas', 'idea-triage', 'idea-go']);
+  assert.deepEqual(list.result.prompts.map((p) => p.name), ['idea', 'ideas']);
+  const ideas = await request('prompts/get', { name: 'ideas', arguments: { request: 'go 12' } });
+  assert.match(ideas.result.messages[0].content.text, /^Request: go 12\n[\s\S]*idea_next[\s\S]*idea_remove/);
   const got = await request('prompts/get', { name: 'idea', arguments: { text: 'teleport the cat' } });
   const text = got.result.messages[0].content.text;
   assert.match(text, /teleport the cat/);
   assert.doesNotMatch(text, /^---/);
   assert.match(text, /idea_add/);
+});
+
+// The tests below continue from the archive that the tests above left: #1, #3, #4 do; #2 done.
+
+test('idea_list full shows the queue in full, so /ideas all can judge each idea; idea_remove deletes ideas', async () => {
+  assert.match((await call('idea_list', { full: true })).text, /^#3 Idea 3\n[^]*\n\n#4 Idea 4\n[^]*\n\n#1 Cache API responses\n/);
+  const none = await call('idea_remove', { ids: [] });
+  assert.equal(none.isError, true);
+  assert.match((await call('idea_remove', { ids: [1, 3, 4] })).text, /^Removed 3 ideas\.\n\n#1 Cache API responses\n[^]*\n\n#3 Idea 3\n/);
+  assert.match((await call('idea_list')).text, /^ideamine: 0 open · 1 done/);
+  assert.equal((await call('idea_list', { full: true })).text, 'No ideas match.');
+});
+
+test('idea_next with triage: true triages first, so /ideas go never has to stop', async () => {
+  await call('idea_add', { text: '- first\n- second\n- third' }); // #5 #6 #7
+  assert.match((await call('idea_next')).text, /^No idea is ready: 3 untriaged in the inbox\. Pass triage: true/);
+  const next = await call('idea_next', { triage: true });
+  assert.match(next.text, /^Saved 3 verdicts: 2 do · 0 maybe · 1 skip/);
+  assert.match(next.text, /\n\n#5 Idea 5\n[^]*recommended model: sonnet\nproject dir: [^\n]*ideamine-proj-\w+ \(exists\)\n/);
+  assert.match(next.text, /\n\nThe queue:\nideamine: 2 open \(2 do\)[^]*#5[^]*#6/); // to choose an idea that fits the chat
+
+  // An explicit id triages only that idea. A saved folder that is gone is marked.
+  await call('idea_add', { text: '- eighth\n- ninth', project: path.join(project, 'gone') }); // #8 #9
+  const nine = (await call('idea_next', { id: 9, triage: true })).text;
+  assert.match(nine, /^Saved 1 verdict: 1 do[^]*\n\n#9 Idea 9\n/);
+  assert.match(nine, /project dir: [^\n]*gone \(does not exist\)$/);
+  assert.match((await call('idea_list', { filter: 'inbox' })).text, /#8 +eighth/);
+});
+
+test('a manual triage shows the whole queue afterwards', async () => {
+  const out = await call('idea_triage', { headless: true }); // #8, the last one in the inbox
+  assert.match(out.text, /^Saved 1 verdict: 1 do[^]*\n\nideamine: 4 open \(4 do\) · 1 done\n\nDO \(best first\)\n[^]*#8 +sonnet/);
+  assert.match((await call('idea_triage', { headless: true })).text, /^Nothing to triage: the inbox is empty\.\n\nideamine: 4 open/);
 });

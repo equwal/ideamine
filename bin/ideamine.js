@@ -6,15 +6,16 @@ import fs from 'node:fs';
 const HELP = `ideamine: an idea inbox for Claude Code
 
   ideamine add <idea...>          save an idea ("-" reads stdin; a bulleted list = one idea per bullet)
-  ideamine ls [filter] [here]     board. filters: open inbox do maybe skip doing done dropped all
-  ideamine show <id>              one idea in full
+  ideamine ls [lane|-a] [here]    the queue. lanes: open inbox do maybe skip doing done dropped all
+  ideamine cat <id...>            ideas in full
+  ideamine rm <id...>             delete ideas for good
   ideamine done|drop|start|reopen <id> [note...]
   ideamine note <id> <text...>    append a note
   ideamine model <id> <haiku|sonnet|opus|fable>   override the recommended model
   ideamine next [--here]          the idea to build next
   ideamine go [id] [--print]      open Claude Code on the idea's recommended model, in its project
-  ideamine triage [--model sonnet] [--limit 20] [--dry-run]
-                                  score the inbox with one headless \`claude -p\` call
+  ideamine sort [--model sonnet] [--limit 20] [--dry-run]
+                                  triage the inbox with one headless \`claude -p\` call
   ideamine export [file.md]       Markdown export of the whole archive
   ideamine path                   where the archive lives (override with IDEAMINE_HOME)
   ideamine mcp                    run the MCP server on stdio
@@ -67,19 +68,23 @@ async function main() {
       console.log(render.renderAdded(results, store.load()));
       break;
     }
-    case 'ls':
-    case 'list':
-    case 'board': {
-      const lower = words.map((w) => w.toLowerCase());
+    case 'ls': {
+      const lower = words.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
       const filter = lower.find((w) => store.FILTERS.includes(w)) || 'open';
       const here = lower.includes('here') || flags.here;
       console.log(render.renderBoard(store.load(), { filter, project: here ? cwd : null, query: flags.query || '', cwd }));
       break;
     }
-    case 'show': {
-      const idea = store.findIdea(store.load(), needId());
-      if (!idea) fail(`no idea #${words[0]}`);
-      console.log(render.renderIdea(idea));
+    case 'cat': {
+      needId();
+      const db = store.load();
+      const ideas = words.map((id) => store.findIdea(db, id) || fail(`no idea #${id.replace(/^#/, '')}`));
+      console.log(ideas.map(render.renderIdea).join('\n\n'));
+      break;
+    }
+    case 'rm': {
+      needId();
+      for (const idea of store.removeIdeas(words)) console.log(`Removed #${idea.id} ${clip(idea.title, 60)}`);
       break;
     }
     case 'done':
@@ -107,7 +112,7 @@ async function main() {
     case 'next': {
       const idea = store.pickNext(store.load(), { project: cwd, only: !!flags.here });
       if (!idea) {
-        console.log('Nothing is ready to build. Triage the inbox first: ideamine triage');
+        console.log('Nothing is ready to build. Triage the inbox first: ideamine sort');
         break;
       }
       console.log(render.renderIdea(idea));
@@ -117,7 +122,7 @@ async function main() {
       const { buildPrompt, launchSession } = await import('../src/claude.js');
       const db = store.load();
       const idea = words[0] ? store.findIdea(db, words[0]) : store.pickNext(db, { project: cwd });
-      if (!idea) fail(words[0] ? `no idea #${words[0]}` : 'nothing is ready to build; run: ideamine triage');
+      if (!idea) fail(words[0] ? `no idea #${words[0]}` : 'nothing is ready to build; run: ideamine sort');
       const model = idea.triage?.model || 'sonnet';
       const dir = idea.project && fs.existsSync(idea.project) ? idea.project : cwd;
       const prompt = buildPrompt(idea);
@@ -130,7 +135,7 @@ async function main() {
       process.exitCode = launchSession({ model, prompt, cwd: dir });
       break;
     }
-    case 'triage': {
+    case 'sort': {
       const { headlessTriage } = await import('../src/claude.js');
       const out = await headlessTriage({
         model: typeof flags.model === 'string' ? flags.model : undefined,

@@ -2,7 +2,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { BATCH_SCHEMA, pendingIdeas, triagePrompt } from './rubric.js';
-import { applyTriage, load, normalizeModel } from './store.js';
+import { applyTriage, counts, findIdea, load, normalizeModel } from './store.js';
 
 /** Claude Code executable: explicit override, else the one running us (desktop app), else PATH. */
 export function claudeBin() {
@@ -71,12 +71,13 @@ function run(args, input, timeoutMs) {
 /**
  * Triage the inbox with a one-shot `claude -p` call: no tools, no MCP servers, no settings, a
  * two-line system prompt, and JSON-schema output. Runs on the user's normal Claude Code login and
- * costs about 400 tokens per idea, whatever model the calling session uses.
+ * costs about 400 tokens per idea, whatever model the calling session uses. `ids` triages those
+ * ideas instead of the inbox.
  */
-export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL || 'sonnet', limit = 20, dryRun = false, budget = 1 } = {}) {
+export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL || 'sonnet', ids = null, limit = 20, dryRun = false, budget = 1 } = {}) {
   const alias = normalizeModel(model) || model;
   const db = load();
-  const pending = pendingIdeas(db, { limit });
+  const pending = pendingIdeas(db, { ids, limit });
   if (!pending.length) return { message: 'Nothing to triage: the inbox is empty.' };
 
   const prompt = `${triagePrompt(db, pending)}\n\nReturn one verdict for every idea listed above.`;
@@ -115,6 +116,19 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
   const u = out.usage || {};
   const input = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
   return { results, model: alias, cost: out.total_cost_usd, tokens: { input, output: u.output_tokens || 0 } };
+}
+
+/**
+ * The triage that `go` needs before it picks: the idea `id` when it has no verdict, else the whole
+ * inbox. Returns the headlessTriage result, or null when every candidate has a verdict already.
+ */
+export async function triageFirst({ id = null, model } = {}) {
+  const db = load();
+  if (id != null) {
+    const idea = findIdea(db, id);
+    return idea && !idea.triage ? headlessTriage({ model, ids: [idea.id] }) : null;
+  }
+  return counts(db).inbox ? headlessTriage({ model }) : null;
 }
 
 /** The opening prompt for a fresh session that builds one idea. */

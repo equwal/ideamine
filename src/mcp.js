@@ -4,10 +4,23 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { headlessTriage } from './claude.js';
+import { headlessTriage, triageFirst } from './claude.js';
 import { renderAdded, renderBoard, renderIdea } from './render.js';
 import { BATCH_SCHEMA, MODELS, pendingIdeas, triagePrompt } from './rubric.js';
-import { addIdeas, applyTriage, counts, FILTERS, findIdea, lane, load, pickNext, STATUSES, updateIdea } from './store.js';
+import {
+  addIdeas,
+  applyTriage,
+  counts,
+  FILTERS,
+  findIdea,
+  lane,
+  listIdeas,
+  load,
+  pickNext,
+  removeIdeas,
+  STATUSES,
+  updateIdea,
+} from './store.js';
 import { clip, splitIdeas } from './text.js';
 
 const ROOT = new URL('..', import.meta.url);
@@ -43,7 +56,7 @@ const TOOLS = [
   },
   {
     name: 'idea_list',
-    description: 'Show the idea board, or one idea in full when id is given.',
+    description: 'Show the idea board, or one idea in full when id is given. full=true shows every listed idea in full.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -52,6 +65,7 @@ const TOOLS = [
         query: { type: 'string', description: 'Only ideas containing all of these words.' },
         here: { type: 'boolean', description: 'Only ideas from the current project.' },
         limit: { type: 'integer' },
+        full: { type: 'boolean', description: 'Every listed idea in full (brief, text, notes), not one line each.' },
       },
       additionalProperties: false,
     },
@@ -100,17 +114,35 @@ const TOOLS = [
   {
     name: 'idea_next',
     description:
-      'Pick the idea to build next (verdict "do", best value per effort, current project first), or fetch one ' +
-      'by id. Returns its brief, project, and the model recommended to build it.',
+      'Pick the idea to build next (verdict "do" before "maybe", current project first, then best value per ' +
+      'effort), or fetch one by id. Returns its brief, project, and the model recommended to build it. Without ' +
+      'id, it also returns the whole queue. triage=true first triages the untriaged candidates (the inbox, or ' +
+      'the given id) in one headless call.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'integer' },
         here: { type: 'boolean', description: 'Only consider ideas from the current project.' },
+        triage: { type: 'boolean', description: 'Triage untriaged candidates first, so the pick and the model are current.' },
       },
       additionalProperties: false,
     },
-    annotations: { title: 'Next idea', readOnlyHint: true, openWorldHint: false },
+    annotations: { title: 'Next idea', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'idea_remove',
+    description:
+      'Take ideas out of the queue: delete them from the archive for good, and return each one in full. ' +
+      'An unknown id is an error, and then nothing is deleted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'integer' }, description: 'The ideas to delete.' },
+      },
+      required: ['ids'],
+      additionalProperties: false,
+    },
+    annotations: { title: 'Remove ideas', readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
 ];
 
@@ -118,10 +150,7 @@ const TOOLS = [
 // The prompt text is the matching SKILL.md body, so both stay in sync.
 const PROMPTS = [
   { name: 'idea', skill: 'idea', description: 'Save an idea for later', arguments: [{ name: 'text', required: true }] },
-  { name: 'ideas', skill: 'ideas', description: 'Show the idea board', arguments: [{ name: 'request', required: false }] },
-  { name: 'idea-triage', skill: 'idea-triage', description: 'Score the untriaged ideas', arguments: [] },
-  { name: 'idea-go', skill: 'idea-go', description: 'Build the top idea with its model', arguments: [{ name: 'id', required: false }] },
-];
+  { name: 'ideas', skill: 'ideas', description: 'The idea queue: ls, cat, rm, go, all, sort', arguments: [{ name: 'request', required: false }] },];
 
 function skillBody(name, args) {
   const file = new URL(`skills/${name}/SKILL.md`, ROOT);
@@ -140,6 +169,15 @@ function summarizeTriage(results, how = '') {
   return lines.join('\n');
 }
 
+function headlessSummary(out) {
+  return out.message || summarizeTriage(out.results, `${out.model}, ${out.tokens.input} in / ${out.tokens.output} out tokens`);
+}
+
+/** The board after a triage, so the user sees every idea in its new place. */
+function withBoard(text) {
+  return `${text}\n\n${renderBoard(load(), { cwd: currentProject(), hints: true })}`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tool handlers return plain text for the model.
 
@@ -149,23 +187,27 @@ const handlers = {
     return renderAdded(results, load());
   },
 
-  idea_list({ id, filter = 'open', query = '', here = false, limit = 0 }) {
+  idea_list({ id, filter = 'open', query = '', here = false, limit = 0, full = false }) {
     const db = load();
     if (id != null) {
       const idea = findIdea(db, id);
       if (!idea) throw new Error(`no idea #${id}`);
       return renderIdea(idea);
     }
-    return renderBoard(db, { filter, query, limit, project: here ? currentProject() : null, cwd: currentProject() });
+    const project = here ? currentProject() : null;
+    if (full) {
+      const ideas = listIdeas(db, { filter, query, limit, project });
+      return ideas.length ? ideas.map(renderIdea).join('\n\n') : 'No ideas match.';
+    }
+    return renderBoard(db, { filter, query, limit, project, cwd: currentProject() });
   },
 
   async idea_triage({ verdicts, ids, limit, by, headless = false, model }) {
     if (headless) {
-      const out = await headlessTriage({ model, limit: limit || 20 });
-      return out.message || summarizeTriage(out.results, `${out.model}, ${out.tokens.input} in / ${out.tokens.output} out tokens`);
+      return withBoard(headlessSummary(await headlessTriage({ model, limit: limit || 20 })));
     }
     if (Array.isArray(verdicts) && verdicts.length) {
-      return summarizeTriage(applyTriage(verdicts, { by: by ? clip(by, 40) : 'claude' }));
+      return withBoard(summarizeTriage(applyTriage(verdicts, { by: by ? clip(by, 40) : 'claude' })));
     }
     limit ||= 30;
     const db = load();
@@ -186,7 +228,16 @@ const handlers = {
     return `Updated ${bits.join(' · ')}`;
   },
 
-  idea_next({ id, here = false }) {
+  async idea_next({ id, here = false, triage = false }) {
+    const out = [];
+    if (triage) {
+      try {
+        const res = await triageFirst({ id });
+        if (res) out.push(headlessSummary(res));
+      } catch (e) {
+        out.push(`Triage failed: ${e.message}`);
+      }
+    }
     const db = load();
     let idea;
     if (id != null) {
@@ -197,16 +248,30 @@ const handlers = {
     }
     if (!idea) {
       const c = counts(db);
-      return c.inbox
-        ? `No idea is ready to build. ${c.inbox} untriaged in the inbox: triage them first.`
-        : 'No idea is ready to build, and the inbox is empty.';
+      out.push(
+        c.inbox
+          ? `No idea is ready: ${c.inbox} untriaged in the inbox.${triage ? '' : ' Pass triage: true to triage them first.'}`
+          : `The queue is empty${here ? ' for this project' : ''}.`,
+      );
+      return out.join('\n\n');
     }
     const t = idea.triage;
     const lines = [renderIdea(idea), ''];
     if (!t) lines.push('recommended model: none yet (untriaged)');
     else lines.push(`recommended model: ${t.model}`);
-    lines.push(`project dir: ${idea.project || '(none recorded)'}`);
-    return lines.join('\n');
+    // Ideas are saved from any session, so the recorded folder can be a scratch folder that is gone.
+    const dir = idea.project;
+    lines.push(`project dir: ${dir ? `${dir} (${fs.existsSync(dir) ? 'exists' : 'does not exist'})` : '(none recorded)'}`);
+    out.push(lines.join('\n'));
+    // The whole queue, so the caller can choose an idea that fits its chat better than the first one.
+    if (id == null) out.push(`The queue:\n${renderBoard(db, { cwd: currentProject() })}`);
+    return out.join('\n\n');
+  },
+
+  idea_remove({ ids = [] }) {
+    if (!ids.length) throw new Error('pass the ids to delete');
+    const gone = removeIdeas(ids);
+    return [`Removed ${gone.length} idea${gone.length === 1 ? '' : 's'}.`, ...gone.map(renderIdea)].join('\n\n');
   },
 };
 

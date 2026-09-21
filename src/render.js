@@ -62,10 +62,9 @@ export function renderBoard(db, { filter = 'open', project = null, query = '', c
     out.push(ideaLine(idea, { cwd }));
   }
   if (hints) {
-    const c = counts(db);
-    const tips = ['/idea <text> to add', '/ideas #N for details'];
-    if (c.inbox) tips.push('/idea-triage to score the inbox');
-    if (c.do) tips.push('/idea-go to build the top pick');
+    const tips = ['/idea <text> add'];
+    if (counts(db).open) tips.push('/ideas go build next', '/ideas all do all that fit here');
+    if (db.ideas.length) tips.push('/ideas cat N show', '/ideas rm N delete', '/ideas help');
     out.push('', tips.join(' · '));
   }
   return out.join('\n');
