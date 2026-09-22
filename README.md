@@ -47,6 +47,7 @@ Marketplaces you add yourself do not auto-update. To upgrade, run `claude plugin
 | `/ideas-web` · `off` | Start the dashboard with a button for each command on this PC, and show its address. See [Buttons](#buttons). | **No** |
 | `/ideas-sync <url>` · `off` | Share one archive between all your machines through an ideamine server. See [One archive for every machine](#one-archive-for-every-machine). | **No** |
 | `/ideas-go [12]` | Build the idea that fits this chat, else the first in the queue, or #12, on its recommended model. New ideas are triaged first. | Yes, this is the build |
+| `/ideas-pipeline [12]` | Build the next idea, #12, or new text through seven agents, with two approval gates. See [Agent pipeline](#agent-pipeline). | Yes, this is the build |
 | `/ideas-all` | Claude reads every idea, takes the ones that fit this chat out of the queue, and does them. The others stay in the queue. | Yes, this is the build |
 | `/ideas-sort` | Triage the inbox now and show the queue. You do not have to: `/ideas-go` triages when it must. | Yes, briefly |
 | `/ideas-watch [off]` | Turn on the watcher: Haiku triages each new idea and pairs it with its project, in the background. With no argument, it also shows what the watcher did. | Haiku, only for new ideas |
@@ -59,6 +60,34 @@ Each command has its own name, so the slash menu shows all of them when you type
 You save ideas from any session, so the folder that ideamine records is only the folder you were in. That can be the scratch folder of another chat. For this reason, the triage pairs each idea with the project that it is about (see [The watcher](#the-watcher)), and `/ideas-go` and `/ideas-all` let Claude judge by the text which ideas fit the current chat, and where to build each one. `/ideas-go` builds in the current project when the idea fits it. Else it uses the recorded folder if that folder exists, or finds the project that the idea is about. If it cannot find the project, it stops and tells you.
 
 Claude can also save ideas by itself. If you write "idea: dark mode for the popup" or "save that for later", it calls the `idea_add` tool and continues the current task.
+
+## Agent pipeline
+
+```
+> /ideas-pipeline 12
+```
+
+`/ideas-pipeline` sends one idea through a pipeline of seven agents. Give it an idea number, or new text: then ideamine saves the text as an idea first. With no argument, it takes the next idea in the queue. The pipeline is slower than `/ideas-go`, it costs more, and it asks you to approve two times. Use it for the ideas where a wrong build costs more than the tokens.
+
+```
+researcher ──► story-writer ──► GATE 1: you approve the stories ──► project-manager ──► GATE 2: you approve the plan
+  ──► engineers (in parallel, one git worktree each) ──► integrator ──► e2e-tester + validator
+  ──► pass: done · fail: the project manager plans again (3 rounds at most), then Claude asks you
+```
+
+| Agent | Model | Job |
+|---|---|---|
+| `researcher` | Opus | Maps the project from evidence |
+| `story-writer` | Sonnet | Turns the idea into stories with acceptance criteria |
+| `project-manager` | your session's model | Checks that the stories are possible, and splits the work into tasks and waves |
+| `engineer` | Opus | Builds one task in its own git worktree, and proves each claim with command output |
+| `integrator` | Opus | Merges the task branches, and proves that the build and the tests pass |
+| `e2e-tester` | Opus | Runs the product to check each claim of the engineers |
+| `validator` | Opus | Compares the result with the stories, and finds work that no story asked for |
+
+The agents keep their own models. The pipeline does not use the recommended model of the idea. The artifacts are in `.pipeline/` in the project, and the pipeline adds that folder to `.git/info/exclude`. After each phase, Claude adds a note to the idea, for example `pipeline: plan approved (3 tasks, 2 waves)`, so the ticket on the dashboard shows the phase. When the tests and the validation pass, the idea is done. When the third round fails, the idea stays in `doing`, and the note tells what failed. Claude does not reset your branch without your permission. Each gate ends a turn, so after a gate Claude Code can ask you to allow the ideamine tools.
+
+The pipeline and its agents come from agent-pipeline by [map588](https://github.com/map588).
 
 ## The watcher
 
@@ -289,6 +318,7 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 /ideas-go        ──► Claude ──► MCP idea_next ──► claude -p (Sonnet, minimal context), for new ideas only
                                               ──► verdict · impact · size · cheapest capable model · brief
                             ──► subagent on that model ──► builds it ──► idea_update: done
+/ideas-pipeline  ──► Claude ──► MCP idea_next ──► seven agents, two gates ──► idea_update: a note after each phase, then done
 /ideas-all       ──► Claude ──► MCP idea_list (full) ──► idea_remove for the ideas that fit this chat ──► builds them
 
 watcher on: any prompt ──► hook ──► background pass ──► claude -p (Haiku) ──► verdicts + a project for each idea
@@ -302,7 +332,7 @@ sync on: each change ──► outbox ──► ideamine server ──► the ar
 prompt log on: any prompt ──► hook ──► prompt outbox ──► background sync ──► the Prompts tab
 ```
 
-The plugin contains a Node MCP server with no dependencies, fifteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
+The plugin contains a Node MCP server with no dependencies, sixteen skills (the slash commands), one hook, and the seven agents of the agent pipeline. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
 
 ## Development
 

@@ -109,11 +109,13 @@ test('tool errors come back as isError results, not protocol errors', async () =
 test('prompts mirror the skills', async () => {
   const list = await request('prompts/list');
   const names = list.result.prompts.map((p) => p.name);
-  assert.deepEqual(names, ['idea', 'ideas', 'ideas-ls', 'ideas-cat', 'ideas-rm', 'ideas-find', 'ideas-groups', 'ideas-done', 'ideas-reopen', 'ideas-go', 'ideas-all', 'ideas-sort', 'ideas-watch', 'ideas-web', 'ideas-sync']);
+  assert.deepEqual(names, ['idea', 'ideas', 'ideas-ls', 'ideas-cat', 'ideas-rm', 'ideas-find', 'ideas-groups', 'ideas-done', 'ideas-reopen', 'ideas-go', 'ideas-pipeline', 'ideas-all', 'ideas-sort', 'ideas-watch', 'ideas-web', 'ideas-sync']);
   // One prompt for each skill, so that other MCP clients get the same commands as the plugin.
   assert.deepEqual([...names].sort(), fs.readdirSync(new URL('../skills', import.meta.url)).sort());
   const go = await request('prompts/get', { name: 'ideas-go', arguments: { id: '12' } });
   assert.match(go.result.messages[0].content.text, /Requested idea: 12\b[\s\S]*idea_next[\s\S]*run_in_background/);
+  const pipeline = await request('prompts/get', { name: 'ideas-pipeline', arguments: { id: 'dark mode for the popup' } });
+  assert.match(pipeline.result.messages[0].content.text, /^Build one idea through the agent pipeline\. Requested: dark mode for the popup\.[\s\S]*idea_add[\s\S]*Gate 2/);
   const got = await request('prompts/get', { name: 'idea', arguments: { text: 'teleport the cat' } });
   const text = got.result.messages[0].content.text;
   assert.match(text, /teleport the cat/);
