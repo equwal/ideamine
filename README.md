@@ -280,6 +280,7 @@ ideamine publish [url|off] [--dir folder]         # the dashboard (see above)
 ideamine serve [--port 4332]                      # the dashboard with buttons, on 127.0.0.1
 ideamine sync [url|off]                           # one archive for every machine (see above)
 ideamine prompts import                           # the prompts of older chats, for the Prompts tab
+ideamine usage [days]                             # tokens, models, and price for each project
 ideamine config [key [value]]                     # show or change a setting
 ideamine export IDEAS.md                          # Markdown copy of everything
 ```
