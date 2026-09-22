@@ -99,7 +99,8 @@ main { padding: 12px; }
 
 /* board */
 .board { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; padding-bottom: 8px; }
-.column { flex: 0 0 260px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+/* min-width keeps each lane at its width. Without it, a long note in a card makes the lane wide. */
+.column { flex: 0 0 260px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .column-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 600; }
 .column-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color); flex: none; }
 .column-title { flex: 1; }
