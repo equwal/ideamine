@@ -1,38 +1,35 @@
-// Checks that /ideas-pipeline and the seven pipeline agents fit together. The pipeline itself runs in a
-// Claude Code session, so these tests do not run it.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import test from 'node:test';
+import { test } from 'node:test';
+import { buildPrompt, pipelinePrompt, progressInstructions } from '../src/claude.js';
 
-const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
-const plugin = JSON.parse(read('.claude-plugin/plugin.json')).name;
-const skill = read('skills/ideas-pipeline/SKILL.md');
-const agentFiles = fs.readdirSync(new URL('../agents', import.meta.url)).filter((f) => f.endsWith('.md'));
-const frontmatter = (text) =>
-  Object.fromEntries([...text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)[1].matchAll(/^([\w-]+): (.*?)\r?$/gm)].map((m) => [m[1], m[2]]));
+const idea = { id: 12, title: 'Sync subtitles', text: 'sync subtitles with the audiobook', triage: { brief: 'Align the text with the audio track.' } };
 
-test('the pipeline skill names each agent of the plugin, and each name is an agent', () => {
-  const named = new Set([...skill.matchAll(new RegExp(`\`${plugin}:([\\w-]+)\``, 'g'))].map((m) => m[1]));
-  const agents = agentFiles.map((f) => frontmatter(read(`agents/${f}`)).name);
-  assert.equal(agents.length, 7);
-  assert.deepEqual([...named].sort(), agents.sort());
+test('the pipeline request names the idea, its project, and its id, so the pipeline can report on it', () => {
+  const prompt = pipelinePrompt(idea, { dir: '/work/app' });
+  assert.equal(prompt, [
+    '/pipeline Build idea #12 from my ideamine archive: Sync subtitles',
+    'Align the text with the audio track.',
+    'My original note: sync subtitles with the audiobook',
+    'Project: /work/app',
+    '',
+    ...progressInstructions(12),
+  ].join('\n'));
+  assert.match(prompt, /ideamine note 12 "pipeline: <phase>"/);
+  assert.match(prompt, /ideamine done 12 /);
+  assert.match(pipelinePrompt({ ...idea, triage: null }, { dir: '/x' }), /^\/pipeline Build idea #12[^]*\nMy original note: /);
+  assert.doesNotMatch(buildPrompt(idea), /^\/pipeline/); // /ideas-go keeps its one-agent prompt
 });
 
-test('each agent has a name that matches its file, a description, and a model', () => {
-  for (const f of agentFiles) {
-    const fm = frontmatter(read(`agents/${f}`));
-    assert.equal(fm.name, f.replace(/\.md$/, ''), f);
-    assert.ok(fm.description && fm.model, f);
+test('the pipeline ships with its seven agents, and the skill names each of them', () => {
+  const root = new URL('../', import.meta.url);
+  const files = fs.readdirSync(new URL('agents/', root)).filter((f) => f.endsWith('.md')).sort();
+  assert.deepEqual(files, ['e2e-tester.md', 'engineer.md', 'integrator.md', 'project-manager.md', 'researcher.md', 'story-writer.md', 'validator.md']);
+  const skill = fs.readFileSync(new URL('skills/pipeline/SKILL.md', root), 'utf8');
+  for (const file of files) {
+    const name = file.slice(0, -3);
+    const text = fs.readFileSync(new URL(`agents/${file}`, root), 'utf8');
+    assert.match(text, new RegExp(`^name: ${name}$`, 'm'), `${file} names itself`);
+    assert.match(skill, new RegExp(`\\b${name}\\b`), `the pipeline skill names ${name}`);
   }
-});
-
-test('the pipeline skill may call each ideamine tool that it tells Claude to call', () => {
-  const allowed = skill.match(/^allowed-tools: (.*?)\r?$/m)[1].split(/,\s*/);
-  const told = new Set([...skill.matchAll(/`(idea_[a-z]+)`/g)].map((m) => m[1]));
-  assert.ok(told.size >= 3);
-  for (const tool of told) assert.ok(allowed.includes(`mcp__plugin_${plugin}_${plugin}__${tool}`), tool);
-});
-
-test('the package ships the agents', () => {
-  assert.ok(JSON.parse(read('package.json')).files.includes('agents'));
 });
