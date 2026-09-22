@@ -11,7 +11,7 @@ test('the page script compiles, and the tabs match the views the script knows', 
   const tabs = [...page.matchAll(/data-view="([a-z]+)"/g)].map((m) => m[1]);
   const views = JSON.parse(/const VIEWS = (\[[^\]]*\]);/.exec(script)[1].replace(/'/g, '"'));
   assert.deepEqual(tabs, views);
-  assert.deepEqual(tabs, ['board', 'timeline', 'table', 'projects', 'flow', 'matrix', 'groups', 'prompts', 'memory']);
+  assert.deepEqual(tabs, ['board', 'timeline', 'table', 'projects', 'flow', 'matrix', 'groups', 'prompts', 'memory', 'usage']);
   for (const view of views) assert.match(script, new RegExp(`state\\.view === '${view}'|else renderBoard`), `render() handles ${view}`);
 });
 

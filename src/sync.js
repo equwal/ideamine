@@ -22,6 +22,8 @@ const WAIT_AFTER_ERROR_MS = 2 * 60 * 1000; // after a failed sync, before kick()
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const OPS_PER_REQUEST = 100;
 const PROMPT_BYTES_PER_REQUEST = 256 * 1024;
+const USAGE_EVERY_MS = 10 * 60 * 1000; // the token use goes to the server at most this often
+const USAGE_DAYS = 365; // the rows that go to the server, so that one request stays small
 const MAX_PROMPT_CHARS = 100 * 1000; // a longer paste is cut, so that each prompt fits in a request
 
 const outboxPath = () => path.join(home(), 'outbox.jsonl');
@@ -151,13 +153,40 @@ async function sendPrompts({ timeoutMs }) {
   await sendPart();
 }
 
+/** The id of this machine, so that the server keeps the token use of each machine apart. */
+export function machineId() {
+  const state = readState();
+  if (state.machine) return state.machine;
+  const machine = crypto.randomUUID();
+  writeState({ machine });
+  return machine;
+}
+
+/**
+ * Send the token use of this machine. The server keeps one set of rows for each machine, so the new
+ * rows take the place of the rows from before. The scan reads only the new bytes of the transcripts.
+ */
+async function sendUsage({ timeoutMs }) {
+  const state = readState();
+  if (Date.now() - Date.parse(state.usageAt || 0) < USAGE_EVERY_MS) return;
+  const usage = await import('./usage.js');
+  const rows = usage.since(usage.scan().rows, USAGE_DAYS);
+  if (!rows.length) return;
+  await request('api/usage', { body: { machine: machineId(), host: os.hostname(), rows }, timeoutMs });
+  writeState({ usageAt: new Date().toISOString() });
+}
+
 /**
  * Bring the copy here up to date: send the changes that wait, then take the archive of the server.
- * With `prompts`, send the prompts that wait too. Throws SyncError when the server does not answer.
+ * With `prompts`, send the prompts and the token use too. Throws SyncError when the server does not
+ * answer.
  */
 export async function pull({ timeoutMs = 10000, prompts = false } = {}) {
   let { db } = await sendOps({ timeoutMs });
-  if (prompts) await sendPrompts({ timeoutMs });
+  if (prompts) {
+    await sendPrompts({ timeoutMs });
+    await sendUsage({ timeoutMs });
+  }
   db ||= (await request('api/db', { timeoutMs })).db;
   keep(db);
 }

@@ -210,12 +210,15 @@ server {
 
 `serve_hosts` names the Host that nginx sends. Without it, the server refuses the request, so a DNS rebinding page cannot reach the archive. The server does not ask who you are: the network decides who can reach it. Put it only on a private network like WireGuard.
 
-### Prompts and Memory
+### Prompts, Memory, and Usage
 
 The dashboard can also show what your Claudes did:
 
 - **Prompts**: each prompt that you typed, on every machine, as a timeline of sessions. `ideamine config prompt_log on` sends each prompt to the ideamine server in the background. The full text goes, without the notes that Claude Code puts into a prompt; a paste longer than 100,000 characters is cut. `ideamine prompts import` sends the prompts of your older chats from the Claude Code transcripts.
 - **Memory**: the memories of a [memstate](https://github.com/map588/memstate) daemon: a timeline of the writes of each project, the latest writes, and each memory with its versions. Set `memstate_url` on the server, for example `http://127.0.0.1:8765`. The dashboard only reads memstate.
+- **Usage**: the tokens, the models, and the price for each project. Claude Code writes a transcript for each session, and each answer in it carries the model and the token counts. ideamine adds them up for each day, project, and model, and puts the API price on them. Each machine sends its numbers with the sync, at most every 10 minutes, and the dashboard shows every machine together. `ideamine usage [days]` prints the same table in a terminal.
+
+  The price is the price of the API (see [pricing](https://www.anthropic.com/pricing)): a cache write costs 1.25 times the input price with the 5-minute lifetime and 2 times with the 1-hour lifetime, and a cache read is much cheaper than input. **A Claude subscription does not bill for each token**, so with a subscription the price says what the same work would cost through the API. A model that the price list does not know shows 0. The price list is `PRICES` in `src/usage.js`.
 
 ## With the agent pipeline
 

@@ -29,6 +29,7 @@ const HELP = `ideamine: an idea inbox for Claude Code
   ideamine serve [--port 4332]    the dashboard with a button for each command, at 127.0.0.1
   ideamine sync [url|off]         share the archive of every machine through an ideamine server
   ideamine prompts import         put the prompts of older Claude Code chats into the prompt log
+  ideamine usage [days]           tokens, models, and price for each project (0 days: all time)
   ideamine config [key [value]]   show or change a setting (an empty value restores the default)
   ideamine export [file.md]       Markdown export of the whole archive
   ideamine path                   where the archive lives (override with IDEAMINE_HOME)
@@ -265,6 +266,24 @@ async function main() {
       if (words[0] !== 'import') fail('usage: ideamine prompts import');
       if (!sync.enabled()) fail('the prompt log goes to an ideamine server. Turn sync on first: ideamine sync <url>');
       console.log(`Put ${sync.importPrompts()} prompts from ${sync.transcriptsDir()} into the prompt outbox. The next sync sends them.`);
+      break;
+    }
+    case 'usage': {
+      const usage = await import('../src/usage.js');
+      const days = Number(words[0]) || 0;
+      const { rows, files } = usage.scan();
+      const projects = usage.byProject(usage.since(rows, days));
+      const money = (n) => `$${n.toFixed(2)}`;
+      const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+      const total = projects.reduce((n, p) => n + p.cost, 0);
+      console.log(`ideamine usage: ${money(total)} in ${days ? `the last ${days} days` : 'all time'}, from ${files} transcripts. The price is the price of the API.`);
+      for (const p of projects.slice(0, Number(process.env.IDEAMINE_USAGE_LIMIT) || 20)) {
+        console.log(`\n  ${money(p.cost).padStart(9)}  ${p.project}`);
+        console.log(`             in ${tokens(p.input)} · out ${tokens(p.output)} · cache write ${tokens(p.write5m + p.write1h)} · cache read ${tokens(p.read)} · ${p.messages} answers`);
+        for (const m of Object.values(p.models).sort((a, b) => b.cost - a.cost)) {
+          console.log(`             ${money(m.cost).padStart(9)}  ${m.model}${usage.priced(m.model) ? '' : ' (no price for this model)'}`);
+        }
+      }
       break;
     }
     case 'config': {

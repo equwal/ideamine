@@ -138,6 +138,7 @@ test('the page comes with live data, and no other page can frame it', async () =
     sync: null,
     prompts: false,
     memory: false,
+    usage: false, // no transcripts of Claude Code in the test home
   });
   assert.match(data.live.watch.status, /^ideamine watch: off/);
 });
@@ -372,4 +373,21 @@ test('a drag to the Do, Maybe, or Skip lane changes only the verdict', async () 
 
   assert.equal((await api('verdict', { id: 1, verdict: 'nope' })).error, 'verdict must be one of do/maybe/skip');
   assert.equal((await api('verdict', { id: 9, verdict: 'do' })).error, 'no idea #9');
+});
+
+test('the server keeps the token use of each machine and puts a price on it', async () => {
+  const row = { day: '2026-09-22', project: 'C:\work', model: 'claude-opus-5', messages: 1, input: 0, output: 1000000, read: 0, write5m: 0, write1h: 0 };
+  assert.equal((await api('usage', { machine: 'm1', host: 'pc1', rows: [row] })).rows, 1);
+  const first = await (await fetch(new URL('api/usage', url))).json();
+  assert.equal(first.rows.length, 1);
+  assert.equal(first.rows[0].cost, 25); // 1M output tokens on Opus 5
+  assert.equal(first.rows[0].host, 'pc1');
+
+  // The same machine sends again: the new rows take the place of the rows from before.
+  assert.equal((await api('usage', { machine: 'm1', host: 'pc1', rows: [row, { ...row, day: '2026-09-21' }] })).rows, 2);
+  assert.equal((await api('usage', { machine: 'm2', host: 'pc2', rows: [row] })).machines, 2);
+  assert.equal((await (await fetch(new URL('api/usage', url))).json()).rows.length, 3);
+
+  assert.equal((await api('usage', { rows: [] })).error, 'a machine id and its rows must come together');
+  assert.equal((await api('usage', { machine: 'm3', rows: [{ day: 'not a day' }] })).rows, 0); // a bad row is left out
 });

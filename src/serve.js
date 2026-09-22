@@ -36,6 +36,7 @@ const APPLIED_KEPT = 1000; // results of recent changes, so that a change that c
 
 const logPath = () => path.join(store.home(), 'serve.log');
 const promptsPath = () => path.join(store.home(), 'prompts.jsonl');
+const usagePath = () => path.join(store.home(), 'usage.json');
 const appliedPath = () => path.join(store.home(), 'applied.json');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -138,6 +139,7 @@ async function liveData() {
   const db = await archive.fresh();
   const { data, note } = await publish.build(db, { timeoutMs: EMBED_TIMEOUT_MS });
   const { hasClaude } = await import('./claude.js');
+  const { transcriptsDir } = await import('./usage.js');
   const w = watch.readState();
   const synced = sync.enabled();
   return {
@@ -150,6 +152,7 @@ async function liveData() {
       sync: synced ? { url: sync.serverUrl(), offline: archive.offlineReason(), waiting: sync.waiting() } : null,
       prompts: synced || fs.existsSync(promptsPath()),
       memory: synced || !!config.get('memstate_url'),
+      usage: synced || fs.existsSync(transcriptsDir()) || Object.keys(loadUsage().machines).length > 0,
     },
   };
 }
@@ -275,6 +278,57 @@ function addPrompts(list) {
 function listPrompts(days) {
   const since = days > 0 ? Date.now() - days * DAY : 0;
   return loadPrompts().prompts.filter((p) => Date.parse(p.at) >= since).sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/* ---- token use and price ---- */
+
+/** The rows that the machines sent, by machine id. */
+function loadUsage() {
+  try {
+    const data = JSON.parse(fs.readFileSync(usagePath(), 'utf8'));
+    if (data && data.version === 1 && data.machines) return data;
+  } catch {
+    // No machine sent rows yet.
+  }
+  return { version: 1, machines: {} };
+}
+
+/** Keep the rows of one machine. The new rows take the place of the rows from before. */
+function saveUsage({ machine, host, rows }) {
+  if (typeof machine !== 'string' || !machine || !Array.isArray(rows)) throw new Error('a machine id and its rows must come together');
+  const clean = rows
+    .filter((r) => r && /^\d{4}-\d{2}-\d{2}$/.test(String(r.day)) && typeof r.project === 'string' && typeof r.model === 'string')
+    .map((r) => ({
+      day: r.day,
+      project: String(r.project).slice(0, 300),
+      model: String(r.model).slice(0, 60),
+      messages: Number(r.messages) || 0,
+      input: Number(r.input) || 0,
+      output: Number(r.output) || 0,
+      read: Number(r.read) || 0,
+      write5m: Number(r.write5m) || 0,
+      write1h: Number(r.write1h) || 0,
+    }));
+  const data = loadUsage();
+  data.machines[machine.slice(0, 64)] = { host: field(host, 100), at: new Date().toISOString(), rows: clean };
+  store.withLock(() => store.writeAtomic(usagePath(), `${JSON.stringify(data)}\n`));
+  return { rows: clean.length, machines: Object.keys(data.machines).length };
+}
+
+/** Every row of every machine, each one with the machine that sent it. */
+function usageRows() {
+  const out = [];
+  for (const [machine, m] of Object.entries(loadUsage().machines)) {
+    for (const r of m.rows || []) out.push({ ...r, machine, host: m.host });
+  }
+  return out;
+}
+
+/** The rows of this machine, read from the transcripts of Claude Code. */
+async function localUsage() {
+  const usage = await import('./usage.js');
+  const { rows } = usage.scan();
+  return rows.map((r) => ({ ...r, machine: 'here', host: os.hostname() }));
 }
 
 /** A read from the memstated daemon at memstate_url. */
@@ -421,6 +475,14 @@ async function serverRoute(req, res, route, query) {
     const { ops } = await readJson(req);
     return send(res, 200, { ok: true, results: applyChanges(ops), db: store.load() });
   }
+  if (route === 'GET /api/usage') {
+    const usage = await import('./usage.js');
+    const sent = usageRows();
+    const rows = sent.length ? sent : await localUsage();
+    // The price comes from the server, so that one price list serves every page.
+    return send(res, 200, { ok: true, rows: rows.map((r) => ({ ...r, cost: usage.cost(r) })) });
+  }
+  if (route === 'POST /api/usage') return send(res, 200, { ok: true, ...saveUsage(await readJson(req)) });
   if (route === 'POST /api/prompts') {
     const { prompts } = await readJson(req);
     return send(res, 200, { ok: true, ...addPrompts(prompts) });
@@ -449,7 +511,7 @@ async function handle(req, res, ctx) {
     return;
   }
   if (sync.enabled()) {
-    if (route === 'GET /api/prompts' || route.startsWith('GET /api/memory/')) return forward(res, `${pathname.slice(1)}${search}`);
+    if (route === 'GET /api/prompts' || route === 'GET /api/usage' || route.startsWith('GET /api/memory/')) return forward(res, `${pathname.slice(1)}${search}`);
   } else {
     try {
       if ((await serverRoute(req, res, route, searchParams)) !== false) return;
