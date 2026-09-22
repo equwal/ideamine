@@ -36,6 +36,22 @@ test('the watcher starts a pass only when it is on, there is work, and no pass r
   assert.equal(started, 1);
 });
 
+test('a pass that cannot start is recorded, and the caller goes on', async () => {
+  // The dashboard server calls kick() and must live on. Once, a failed start stopped that server.
+  watch.turnOn();
+  store.addIdeas(['one']);
+  const node = process.execPath;
+  process.execPath = path.join(store.home(), 'no-such-node');
+  try {
+    assert.equal(watch.kick(), true);
+    await new Promise((resolve) => setTimeout(resolve, 300)); // the spawn error comes later
+  } finally {
+    process.execPath = node;
+  }
+  assert.match(watch.readState().error, /^cannot start a pass: .*ENOENT/);
+  assert.equal(watch.kick({ startPass: () => assert.fail('must wait after the error') }), false);
+});
+
 test('a pass triages the inbox and the ideas from before pairing, with Haiku, and logs it', async () => {
   store.addIdeas(['old idea', 'new idea']);
   store.applyTriage([{ id: 1, verdict: 'do', impact: 3, size: 's', model: 'sonnet', title: 'Old', why: 'w', brief: 'b' }]);

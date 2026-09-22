@@ -203,7 +203,10 @@ export async function backgroundPublish() {
 
 function startProcess() {
   const bin = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
-  spawn(process.execPath, [bin, 'publish', '--background'], { cwd: home(), detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  const child = spawn(process.execPath, [bin, 'publish', '--background'], { cwd: home(), detached: true, stdio: 'ignore', windowsHide: true });
+  // A publish that cannot start must not stop the caller, for example the server of the dashboard.
+  child.on('error', (e) => writeState({ error: `cannot start a publish: ${e.message}`, errorAt: new Date().toISOString() }));
+  child.unref();
 }
 
 /**

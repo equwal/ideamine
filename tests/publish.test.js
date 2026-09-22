@@ -105,6 +105,21 @@ test('a failed background publish is recorded, and kick() waits before the next 
   assert.match(publish.status(), /failed/);
 });
 
+test('a background publish that cannot start is recorded, and the caller goes on', async () => {
+  store.addIdeas(['one idea']);
+  config.set('publish_url', `${server.url}/`);
+  const node = process.execPath;
+  process.execPath = path.join(store.home(), 'no-such-node');
+  try {
+    assert.equal(publish.kick(), true);
+    await new Promise((resolve) => setTimeout(resolve, 300)); // the spawn error comes later
+  } finally {
+    process.execPath = node;
+  }
+  assert.match(publish.readState().error, /^cannot start a publish: .*ENOENT/);
+  assert.equal(publish.kick({ start: () => assert.fail('must wait after the error') }), false);
+});
+
 test('publish --dir writes both files to a folder', async () => {
   store.addIdeas(['one idea']);
   const dir = path.join(store.home(), 'out');
