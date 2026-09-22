@@ -15,6 +15,7 @@ const HELP = `ideamine: an idea inbox for Claude Code
   ideamine model <id> <haiku|sonnet|opus|fable>   override the recommended model
   ideamine next [--here]          the idea to build next
   ideamine go [id] [--print]      open Claude Code on the idea's recommended model, in its project
+  ideamine go [id] --pipeline     the same, with the agent pipeline (/pipeline) as the request
   ideamine sort [--model sonnet] [--limit 20] [--dry-run]
                                   triage the inbox with one headless \`claude -p\` call
   ideamine watch [off]            the watcher: Haiku triages new ideas and pairs them with projects
@@ -141,17 +142,19 @@ async function main() {
       break;
     }
     case 'go': {
-      const { goPlan, launchSession } = await import('../src/claude.js');
+      const { goPlan, launchSession, pipelinePrompt } = await import('../src/claude.js');
       const db = await archive.fresh();
       const idea = words[0] ? store.findIdea(db, words[0]) : store.pickNext(db, { project: cwd });
       if (!idea) fail(words[0] ? `no idea #${words[0]}` : 'nothing is ready to build; run: ideamine sort');
-      const { model, dir, prompt } = goPlan(idea, cwd);
+      const plan = goPlan(idea, cwd);
+      const { model, dir } = plan;
+      const prompt = flags.pipeline ? pipelinePrompt(idea, { dir }) : plan.prompt;
       if (flags.print) {
         console.log(`directory: ${dir}\nmodel:     ${model}\n\n${prompt}`);
         break;
       }
-      queued(await archive.update(idea.id, { status: 'doing' }));
-      console.log(`Opening Claude Code (${model}) in ${dir} for #${idea.id}…`);
+      queued(await archive.update(idea.id, { status: 'doing', note: flags.pipeline ? 'pipeline: started' : undefined }));
+      console.log(`Opening Claude Code (${model}) in ${dir} for #${idea.id}${flags.pipeline ? ', through the agent pipeline' : ''}…`);
       process.exitCode = launchSession({ model, prompt, cwd: dir });
       break;
     }
