@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as config from './config.js';
 import * as embed from './embed.js';
-import { counts, dbPath, home, lane, listIdeas, load } from './store.js';
+import { baseName, counts, dbPath, home, lane, listIdeas, load } from './store.js';
 
 const PAGE = new URL('../dashboard/index.html', import.meta.url);
 const WAIT_AFTER_ERROR_MS = 10 * 60 * 1000; // after a failed publish, before kick() tries again
@@ -77,7 +77,8 @@ export function snapshot(db, { vectors = null, groups = [], generated = new Date
         status: i.status,
         rank: rank.get(i.id),
         tags: i.tags || [],
-        project: i.project ? path.basename(i.project) : null,
+        project: i.project ? baseName(i.project) : null,
+        host: i.host || null,
         created: i.created,
         updated: i.updated,
         triaged: t?.at || null,
@@ -215,7 +216,8 @@ function startProcess() {
  */
 export function kick({ start = startProcess, now = Date.now() } = {}) {
   const url = config.get('publish_url');
-  if (!url) return false;
+  // With sync on, the ideamine server shows the live archive itself: nothing to upload.
+  if (!url || config.get('sync_url')) return false;
   const state = readState();
   if (state.errorAt && now - Date.parse(state.errorAt) < WAIT_AFTER_ERROR_MS) return false;
   if (isRunning(now)) return false;

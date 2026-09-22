@@ -3,10 +3,11 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { fresh, triage } from './archive.js';
 import { knownProjects } from './projects.js';
 import { renderMarkdown } from './render.js';
 import { BATCH_SCHEMA, pendingIdeas, triagePrompt } from './rubric.js';
-import { applyTriage, counts, findIdea, load, normalizeModel } from './store.js';
+import { counts, findIdea, normalizeModel } from './store.js';
 
 /** Claude Code executable: explicit override, else the one running us (desktop app), else PATH. */
 export function claudeBin() {
@@ -39,6 +40,17 @@ function childEnv() {
     }
   }
   return env;
+}
+
+let claudeFound = null;
+
+/** True when the Claude Code CLI starts on this machine. The answer is kept for the life of the process. */
+export function hasClaude() {
+  if (claudeFound === null) {
+    const [bin, argv] = command(['--version']);
+    claudeFound = spawnSync(bin, argv, { stdio: 'ignore', windowsHide: true, timeout: 20000, env: childEnv() }).status === 0;
+  }
+  return claudeFound;
 }
 
 function parseLooseJson(text) {
@@ -126,7 +138,7 @@ function tokensOf(out) {
  */
 export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL || 'sonnet', ids = null, limit = 20, dryRun = false, budget = 1 } = {}) {
   const alias = normalizeModel(model) || model;
-  const db = load();
+  const db = await fresh();
   const pending = pendingIdeas(db, { ids, limit });
   if (!pending.length) return { message: 'Nothing to triage: the inbox is empty.' };
 
@@ -150,7 +162,8 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
   const out = await runHeadless(args, prompt, { timeoutMs: 5 * 60 * 1000, env });
   const data = out.structured_output ?? parseLooseJson(out.result);
   if (!Array.isArray(data?.verdicts)) throw new Error('claude answered without verdicts');
-  const results = applyTriage(data.verdicts, { by: `${alias} (headless)`, projects });
+  const results = await triage(data.verdicts, { by: `${alias} (headless)`, projects });
+  if (results.queued) return { message: `The verdicts wait for the ideamine server: ${results.reason}` };
   return { results, model: alias, cost: out.total_cost_usd, tokens: tokensOf(out) };
 }
 
@@ -165,7 +178,7 @@ export async function askAboutIdeas(question, { model = 'sonnet', budget = 0.5 }
     budget,
     system: 'You answer questions about a developer\'s backlog of ideas. Answer in a few short lines of plain text. Name each idea by its number, like #12.',
   });
-  const out = await runHeadless(args, `${renderMarkdown(load())}\nQuestion: ${question}`, { timeoutMs: 2 * 60 * 1000 });
+  const out = await runHeadless(args, `${renderMarkdown(await fresh())}\nQuestion: ${question}`, { timeoutMs: 2 * 60 * 1000 });
   return { answer: String(out.result || '').trim(), model: alias, cost: out.total_cost_usd, tokens: tokensOf(out) };
 }
 
@@ -174,7 +187,7 @@ export async function askAboutIdeas(question, { model = 'sonnet', budget = 0.5 }
  * whole inbox. Returns the headlessTriage result, or null when every candidate has a verdict already.
  */
 export async function triageFirst({ id = null, model } = {}) {
-  const db = load();
+  const db = await fresh();
   if (id != null) {
     const idea = findIdea(db, id);
     return idea && !idea.triage ? headlessTriage({ model, ids: [idea.id] }) : null;

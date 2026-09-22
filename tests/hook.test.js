@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { handlePrompt } from '../src/hook.js';
 import * as store from '../src/store.js';
 import { startFakeServer } from './fixtures/fake-server.js';
+import { freePort, startServerProcess } from './fixtures/server-process.js';
 
 const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 
@@ -16,6 +17,7 @@ beforeEach(() => {
   // A pass of the watcher must never reach the real claude or the projects of this machine.
   process.env.IDEAMINE_CLAUDE_BIN = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));
   process.env.CLAUDE_CONFIG_DIR = process.env.IDEAMINE_HOME;
+  for (const name of ['IDEAMINE_SYNC_URL', 'IDEAMINE_PROMPT_LOG']) delete process.env[name];
 });
 
 /** Run the real hook process the way Claude Code does: JSON on stdin, decision on stdout. */
@@ -152,6 +154,62 @@ test('/ideas-find searches by meaning and /ideas-groups groups by meaning, with 
     await server.close();
     delete process.env.IDEAMINE_EMBED_URL;
     delete process.env.IDEAMINE_GROUP_THRESHOLD;
+  }
+});
+
+const serverIdeas = async (url) => (await (await fetch(`${url}api/db`)).json()).db.ideas.map((i) => i.text);
+
+test('with sync on, /idea saves on the server, /ideas shows every machine, and an idea waits when the server is away', async () => {
+  const remote = await startServerProcess();
+  try {
+    process.env.IDEAMINE_SYNC_URL = remote.url;
+    assert.match(runHook('/idea shared by every machine').reason, /Saved #1 · shared by every machine/);
+    assert.deepEqual(await serverIdeas(remote.url), ['shared by every machine']);
+    // Another machine adds an idea. The next /ideas here shows it.
+    const laptop = { ops: [{ op: 'add', texts: ['from the laptop'], oid: 'laptop-1' }] };
+    await fetch(`${remote.url}api/ops`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(laptop) });
+    assert.match(runHook('/ideas').reason, /#2 {3}from the laptop[\s\S]*#1 {3}shared by every machine/);
+
+    process.env.IDEAMINE_SYNC_URL = `http://127.0.0.1:${await freePort()}/`; // the tunnel is down
+    assert.match(runHook('/idea written offline').reason, /^💡 Saved here: written offline\. The ideamine server does not answer, so it gets the idea later \(1 waiting\)\.$/);
+    assert.match(runHook('/ideas').reason, /^\(The ideamine server does not answer\. This is the copy from \d{4}-/);
+
+    process.env.IDEAMINE_SYNC_URL = remote.url; // the tunnel is back
+    assert.match(runHook('/ideas').reason, /written offline/);
+    assert.deepEqual((await serverIdeas(remote.url)).sort(), ['from the laptop', 'shared by every machine', 'written offline']);
+  } finally {
+    await remote.stop();
+  }
+});
+
+test('/ideas-sync turns sync on, keeps the archive that was here, and shows the state', async () => {
+  const remote = await startServerProcess();
+  try {
+    store.addIdeas(['only here']);
+    const on = runHook(`/ideas-sync ${remote.url}`).reason;
+    assert.match(on, /^ideamine sync: http:\/\/127\.0\.0\.1:\d+\/\nlast sync \d{4}-\d{2}-\d{2} \d{2}:\d{2}\.\n/); // a new archive has no revision yet
+    assert.match(on, /The archive that was here is in .*ideas\.before-sync-\d{4}-\d{2}-\d{2}\.json\.$/);
+    assert.match(runHook('/ideamine:ideas-sync').reason, /^ideamine sync: http/);
+    assert.match(runHook('/ideas-sync 10.66.0.1').reason, /^ideamine sync: "10\.66\.0\.1" is not an http:\/\/ or https:\/\/ address\. Usage/);
+    assert.match(runHook('/ideas-sync off').reason, /^ideamine sync: off/);
+  } finally {
+    await remote.stop();
+  }
+});
+
+test('with the prompt log on, each prompt goes to the server in the background', async () => {
+  const remote = await startServerProcess();
+  try {
+    process.env.IDEAMINE_SYNC_URL = remote.url;
+    process.env.IDEAMINE_PROMPT_LOG = 'on';
+    assert.equal(runHook('please fix the flaky test'), null); // an ordinary prompt still goes to the model
+    let prompts = [];
+    for (const deadline = Date.now() + 20000; !prompts.length && Date.now() < deadline; await new Promise((r) => setTimeout(r, 200))) {
+      prompts = (await (await fetch(`${remote.url}api/prompts`)).json()).prompts;
+    }
+    assert.deepEqual(prompts.map((p) => [p.prompt, p.session, p.cwd]), [['please fix the flaky test', 's1', '/work/app']]);
+  } finally {
+    await remote.stop();
   }
 });
 

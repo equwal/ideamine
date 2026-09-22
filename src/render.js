@@ -1,8 +1,7 @@
 // Plain-text views. Kept compact on purpose: every character here may end up in a model's context.
 
-import path from 'node:path';
 import { samePath } from './projects.js';
-import { counts, lane, listIdeas } from './store.js';
+import { baseName, counts, lane, listIdeas } from './store.js';
 import { clip } from './text.js';
 
 const LANE_TITLES = {
@@ -16,7 +15,7 @@ const LANE_TITLES = {
 };
 
 function projectName(p) {
-  return p ? path.basename(p) : '';
+  return p ? baseName(p) : '';
 }
 
 export function stamp(iso) {

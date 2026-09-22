@@ -5,25 +5,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import * as archive from './archive.js';
 import { headlessTriage, triageFirst } from './claude.js';
 import * as embed from './embed.js';
 import { knownProjects } from './projects.js';
 import { renderAdded, renderBoard, renderFound, renderGroups, renderIdea } from './render.js';
 import { BATCH_SCHEMA, MODELS, pendingIdeas, triagePrompt } from './rubric.js';
-import {
-  addIdeas,
-  applyTriage,
-  counts,
-  FILTERS,
-  findIdea,
-  lane,
-  listIdeas,
-  load,
-  pickNext,
-  removeIdeas,
-  STATUSES,
-  updateIdea,
-} from './store.js';
+import { counts, FILTERS, findIdea, lane, listIdeas, load, pickNext, STATUSES } from './store.js';
 import { clip, splitIdeas } from './text.js';
 
 const ROOT = new URL('..', import.meta.url);
@@ -170,6 +158,7 @@ const PROMPTS = [
   { name: 'ideas-sort', description: 'Triage the inbox now and show the queue', arguments: [] },
   { name: 'ideas-watch', description: 'Turn the background watcher on or off', arguments: [{ name: 'off', required: false }] },
   { name: 'ideas-web', description: 'Start or stop the dashboard with buttons on this PC', arguments: [{ name: 'off', required: false }] },
+  { name: 'ideas-sync', description: 'Share one archive between your machines through an ideamine server', arguments: [{ name: 'url', required: false }] },
 ];
 
 function skillBody(name, args) {
@@ -205,13 +194,13 @@ function withBoard(text) {
 // Tool handlers return plain text for the model.
 
 const handlers = {
-  idea_add({ text, tags, project }) {
-    const results = addIdeas(splitIdeas(text || ''), { source: 'mcp', project: project || currentProject(), tags });
-    return renderAdded(results, load());
+  async idea_add({ text, tags, project }) {
+    const results = await archive.add(splitIdeas(text || ''), { source: 'mcp', project: project || currentProject(), tags });
+    return results.queued ? `Saved on this machine. ${archive.queuedText(results)}` : renderAdded(results, load());
   },
 
   async idea_list({ id, filter = 'open', query = '', here = false, limit = 0, full = false, semantic = false, groups = false }) {
-    const db = load();
+    const db = await archive.fresh();
     if (id != null) {
       const idea = findIdea(db, id);
       if (!idea) throw new Error(`no idea #${id}`);
@@ -239,11 +228,12 @@ const handlers = {
       return withBoard(headlessSummary(await headlessTriage({ model, limit: limit || 20 })));
     }
     if (Array.isArray(verdicts) && verdicts.length) {
-      const projects = knownProjects(load());
-      return withBoard(summarizeTriage(applyTriage(verdicts, { by: by ? clip(by, 40) : 'claude', projects })));
+      const projects = knownProjects(await archive.fresh());
+      const results = await archive.triage(verdicts, { by: by ? clip(by, 40) : 'claude', projects });
+      return results.queued ? archive.queuedText(results) : withBoard(summarizeTriage(results));
     }
     limit ||= 30;
-    const db = load();
+    const db = await archive.fresh();
     const pending = pendingIdeas(db, { ids, limit });
     if (!pending.length) return 'Nothing to triage: the inbox is empty.';
     return (
@@ -253,8 +243,9 @@ const handlers = {
     );
   },
 
-  idea_update({ id, ...patch }) {
-    const idea = updateIdea(id, patch);
+  async idea_update({ id, ...patch }) {
+    const idea = await archive.update(id, patch);
+    if (idea.queued) return archive.queuedText(idea);
     const bits = [`#${idea.id} ${clip(idea.title, 60)} · ${lane(idea)}`];
     if (patch.model) bits.push(`model ${idea.triage.model}`);
     if (patch.note) bits.push('note added');
@@ -271,7 +262,7 @@ const handlers = {
         out.push(`Triage failed: ${e.message}`);
       }
     }
-    const db = load();
+    const db = await archive.fresh();
     let idea;
     if (id != null) {
       idea = findIdea(db, id);
@@ -301,9 +292,10 @@ const handlers = {
     return out.join('\n\n');
   },
 
-  idea_remove({ ids = [] }) {
+  async idea_remove({ ids = [] }) {
     if (!ids.length) throw new Error('pass the ids to delete');
-    const gone = removeIdeas(ids);
+    const gone = await archive.remove(ids);
+    if (gone.queued) return archive.queuedText(gone);
     return [`Removed ${gone.length} idea${gone.length === 1 ? '' : 's'}.`, ...gone.map(renderIdea)].join('\n\n');
   },
 };

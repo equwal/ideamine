@@ -223,6 +223,30 @@ textarea { width: 100%; resize: vertical; }
 .toast-busy { border-left-color: var(--accent); }
 .toast-error { border-left-color: var(--lane-dropped); }
 
+/* prompts and memory tabs */
+.view-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--text-dim); }
+.view-note { color: var(--text-muted); font-size: 12px; }
+.section-title { font-size: 13px; font-weight: 700; margin: 18px 0 8px; }
+.row-list { display: flex; flex-direction: column; gap: 6px; max-width: 860px; }
+.row-item { display: grid; grid-template-columns: 150px 1fr; gap: 10px; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.row-item:hover { border-color: var(--border-strong); }
+.row-meta { font-size: 11px; color: var(--text-muted); }
+.row-text { font-size: 13px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; word-break: break-word; }
+@media (max-width: 640px) { .row-item { grid-template-columns: 1fr; gap: 2px; } }
+.tl-tick { stroke: var(--text-dim); stroke-width: 2; cursor: pointer; }
+.tl-tick:hover, .tl-tick:focus-visible { stroke: var(--text); stroke-width: 3; outline: none; }
+.tl-span { fill: var(--phase-inbox); }
+.tl-dot { stroke: var(--surface); stroke-width: 1; cursor: pointer; }
+.tl-dot:hover, .tl-dot:focus-visible { stroke: var(--text); stroke-width: 2; outline: none; }
+.mem-area { margin-bottom: 14px; }
+.mem-area h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: 6px; }
+.mem-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.mem-card { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.mem-card:hover { border-color: var(--border-strong); }
+.mem-key { font-size: 12px; font-weight: 600; word-break: break-all; }
+.mem-preview { font-size: 12px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; margin-top: 4px; }
+.version { border-left: 2px solid var(--border-strong); padding-left: 8px; margin-bottom: 12px; }
+
 /* focus */
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -242,6 +266,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
       <button type="button" role="tab" data-view="board" aria-controls="main">Board</button>
       <button type="button" role="tab" data-view="timeline" aria-controls="main">Timeline</button>
       <button type="button" role="tab" data-view="groups" aria-controls="main">Groups</button>
+      <button type="button" role="tab" data-view="prompts" aria-controls="main" hidden>Prompts</button>
+      <button type="button" role="tab" data-view="memory" aria-controls="main" hidden>Memory</button>
     </nav>
     <label class="parked-toggle">
       <input type="checkbox" id="parked-toggle"> Show parked
@@ -307,6 +333,10 @@ const SEARCH_DEBOUNCE_MS = 300;
 const EMBED_TIMEOUT_MS = 4000;
 const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 const OPEN_LANES = ['doing', 'do', 'maybe', 'inbox'];
+const VIEWS = ['board', 'timeline', 'groups', 'prompts', 'memory'];
+const PROMPT_RANGES = [[1, 'Last day'], [7, 'Last 7 days'], [30, 'Last 30 days'], [0, 'All']];
+// Memory categories share the lane colors, so that the page needs no new colors.
+const CATEGORY_COLORS = { status: 'doing', decision: 'do', gotcha: 'dropped', config: 'maybe', note: 'inbox', reference: 'skip', learning: 'skip' };
 
 const state = {
   data: null,
@@ -318,6 +348,8 @@ const state = {
   query: '',
   searchResult: null,
   busy: false,
+  prompts: { days: 1, list: null, error: null, filter: '' },
+  memory: { overview: null, error: null, project: null, memories: new Map(), histories: new Map() },
 };
 
 let searchTimer = null;
@@ -493,13 +525,21 @@ function renderHeader() {
       el('span', { class: 'count-chip-dot', style: '--chip-color:var(--lane-' + lane + ')' }),
       LANE_LABELS[lane] + ' ' + (counts[lane] ?? 0)));
   }
-  $updated.textContent = 'updated ' + fmtRelative(state.data.generated);
-  $updated.title = fmtDate(state.data.generated) || '';
+  const sync = state.data.live && state.data.live.sync;
+  let where = '';
+  if (sync) where = sync.offline ? ' · the server does not answer: copy on this PC' : ' · shared by every machine';
+  if (sync && sync.waiting) where += ' · ' + sync.waiting + ' waiting';
+  $updated.textContent = 'updated ' + fmtRelative(state.data.generated) + where;
+  $updated.title = fmtDate(state.data.generated) + (sync ? ' · ' + sync.url + (sync.offline ? ' · ' + sync.offline : '') : '');
 }
 
 function renderTabsActive() {
+  const live = state.data.live || {};
   for (const btn of $tabs.querySelectorAll('button')) {
-    const active = btn.dataset.view === state.view;
+    const view = btn.dataset.view;
+    if (view === 'prompts') btn.hidden = !live.prompts;
+    if (view === 'memory') btn.hidden = !live.memory;
+    const active = view === state.view;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-selected', String(active));
   }
@@ -789,6 +829,304 @@ function renderSearch() {
   $main.append(wrap);
 }
 
+/* ---- shared by the prompts and memory tabs ---- */
+
+async function getJson(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  let json = null;
+  try { json = await res.json(); } catch (err) { json = null; }
+  if (!res.ok || !json || !json.ok) throw new Error((json && json.error) || 'HTTP ' + res.status);
+  return json;
+}
+
+function baseName(dir) { return String(dir || '').split(/[\\/]+/).filter(Boolean).pop() || 'no folder'; }
+
+const isoOf = (seconds) => new Date(seconds * 1000).toISOString();
+
+/** A timeline with one row per item: a span bar, and a mark for each event in the row. */
+function renderRowsChart({ rows, label, count, span, marks, onRow, ariaLabel }) {
+  const now = Date.now();
+  let start = Infinity, end = -Infinity;
+  for (const row of rows) {
+    const [from, to] = span(row);
+    start = Math.min(start, from);
+    end = Math.max(end, to);
+  }
+  end = Math.max(end, start + 10 * MIN);
+  const pad = (end - start) * 0.03;
+  start -= pad;
+  end += pad;
+  const scale = buildTimeScale(start, end);
+  const height = TL_HEADER_H + rows.length * TL_ROW_H;
+  const axis = svgEl('g', {});
+  for (const t of scale.ticks) {
+    const x = scale.x(t);
+    axis.append(svgEl('line', { x1: x, x2: x, y1: TL_HEADER_H, y2: height, class: 'tl-grid' }), svgEl('text', { x: x + 4, y: TL_HEADER_H - 8, class: 'tl-tick-label' }, formatTick(t, scale.step)));
+  }
+  const body = svgEl('g', {});
+  rows.forEach((row, i) => {
+    const y = TL_HEADER_H + i * TL_ROW_H;
+    const barY = y + (TL_ROW_H - TL_BAR_H) / 2;
+    const [from, to] = span(row);
+    const x1 = scale.x(from);
+    body.append(svgEl('rect', { x: x1, y: barY, width: Math.max(scale.x(to) - x1, 3), height: TL_BAR_H, rx: 3, class: 'tl-span' }));
+    for (const node of marks(row, scale, barY)) body.append(node);
+  });
+  const svg = svgEl('svg', { width: scale.width, height, viewBox: '0 0 ' + scale.width + ' ' + height, role: 'img', 'aria-label': ariaLabel }, axis, body);
+  if (now >= start && now <= end) {
+    const nx = scale.x(now);
+    svg.append(svgEl('line', { x1: nx, x2: nx, y1: 0, y2: height, class: 'tl-now' }), svgEl('text', { x: nx - 4, y: 11, 'text-anchor': 'end', class: 'tl-now-label' }, 'now'));
+  }
+  const labels = el('div', { class: 'tl-labels' },
+    el('div', { class: 'tl-label-header', style: 'height:' + TL_HEADER_H + 'px' }),
+    rows.map((row) => el('button', { class: 'tl-label-row', type: 'button', style: 'height:' + TL_ROW_H + 'px', onclick: () => onRow(row) },
+      el('code', { class: 'tl-label-key' }, count(row)),
+      el('span', { class: 'tl-label-title' }, label(row)))));
+  return el('div', { class: 'tl-scroll' }, el('div', { class: 'tl-inner' }, labels, el('div', { class: 'tl-chart' }, svg)));
+}
+
+/* ---- prompts tab: the prompt log, one row for each Claude Code session ---- */
+
+async function loadPrompts() {
+  const p = state.prompts;
+  p.loading = true;
+  const days = p.days;
+  try {
+    const list = (await getJson('api/prompts?days=' + days)).prompts;
+    if (days === p.days) p.list = list; // the range did not change during the load
+    p.error = null;
+  } catch (err) {
+    p.list ||= [];
+    p.error = err.message;
+  }
+  p.loading = false;
+  render();
+}
+
+const sessionOf = (q) => q.session || (q.host || 'unknown') + ' ' + q.at.slice(0, 10);
+
+/** One session for each session id, with its prompts in time order. The newest session comes first. */
+function sessionsOf(prompts) {
+  const byId = new Map();
+  for (const q of prompts) {
+    const id = sessionOf(q);
+    if (!byId.has(id)) byId.set(id, { id, host: q.host, cwd: q.cwd, prompts: [] });
+    const s = byId.get(id);
+    s.prompts.push(q);
+    if (q.cwd) s.cwd = q.cwd;
+  }
+  const sessions = [...byId.values()];
+  for (const s of sessions) {
+    s.from = Date.parse(s.prompts[0].at);
+    s.to = Date.parse(s.prompts[s.prompts.length - 1].at);
+  }
+  return sessions.sort((a, b) => b.to - a.to);
+}
+
+// A chat without a project folder runs in a scratch folder of the desktop app. Its first prompt
+// says more than the folder name.
+function sessionLabel(s) {
+  const name = baseName(s.cwd);
+  const first = s.prompts && s.prompts[0];
+  const label = /^scratch-\d{4}-\d{2}-\d{2}-/.test(name) && first ? '“' + first.prompt.replace(/\s+/g, ' ').slice(0, 60) + '”' : name;
+  return label + (s.host ? ' · ' + s.host : '');
+}
+
+function matchesPromptFilter(q) {
+  const f = state.prompts.filter.trim().toLowerCase();
+  return !f || q.prompt.toLowerCase().includes(f) || String(q.cwd || '').toLowerCase().includes(f);
+}
+
+function renderPromptBody(body) {
+  body.textContent = '';
+  const p = state.prompts;
+  if (p.error) body.append(el('p', { class: 'load-error' }, 'Could not load the prompts: ' + p.error));
+  const list = p.list.filter(matchesPromptFilter);
+  if (!list.length) {
+    if (!p.error) body.append(el('p', { class: 'empty-note' }, 'No prompts in this time range.'));
+    return;
+  }
+  const sessions = sessionsOf(list);
+  body.append(el('p', { class: 'view-note' }, list.length + ' prompts in ' + sessions.length + ' sessions. A mark is one prompt.'));
+  body.append(renderRowsChart({
+    rows: sessions,
+    ariaLabel: 'Sessions and their prompts',
+    label: sessionLabel,
+    count: (s) => String(s.prompts.length),
+    span: (s) => [s.from, s.to],
+    onRow: (s) => openTicket('SESSION:' + s.id),
+    marks: (s, scale, barY) => s.prompts.map((q) => {
+      const x = scale.x(Date.parse(q.at));
+      const tick = svgEl('line', { x1: x, x2: x, y1: barY - 3, y2: barY + TL_BAR_H + 3, class: 'tl-tick', tabindex: '0', role: 'img', 'aria-label': fmtDate(q.at) + ': ' + q.prompt.slice(0, 80) });
+      attachTooltip(tick, () => el('div', {}, el('div', { class: 'tooltip-key' }, fmtDate(q.at)), el('div', { class: 'tooltip-title' }, q.prompt.slice(0, 200))));
+      tick.addEventListener('click', () => openTicket('SESSION:' + s.id));
+      return tick;
+    }),
+  }));
+  body.append(el('h2', { class: 'section-title' }, 'Latest prompts'));
+  body.append(el('div', { class: 'row-list' }, list.slice(-30).reverse().map((q) =>
+    el('button', { type: 'button', class: 'row-item', onclick: () => openTicket('SESSION:' + sessionOf(q)) },
+      el('span', { class: 'row-meta' }, fmtDate(q.at), el('br'), baseName(q.cwd) + (q.host ? ' · ' + q.host : '')),
+      el('span', { class: 'row-text' }, q.prompt)))));
+}
+
+function renderPrompts() {
+  $main.textContent = '';
+  const p = state.prompts;
+  const range = el('select', { 'aria-label': 'Time range' }, PROMPT_RANGES.map(([days, label]) => el('option', { value: String(days), selected: days === p.days }, label)));
+  range.addEventListener('change', () => { p.days = Number(range.value); p.list = null; render(); });
+  const filter = el('input', { type: 'search', class: 'search-input', placeholder: 'Filter prompts…', 'aria-label': 'Filter prompts' });
+  filter.value = p.filter;
+  const body = el('div', {});
+  // Only the list below the filter changes while you type, so the filter keeps the focus.
+  filter.addEventListener('input', () => { p.filter = filter.value; if (p.list) renderPromptBody(body); });
+  $main.append(el('div', { class: 'view-controls' }, range, filter), body);
+  if (!p.list) body.append(el('p', { class: 'empty-note' }, 'Loading the prompts…'));
+  else renderPromptBody(body);
+}
+
+function buildSessionDrawer(id) {
+  const frag = document.createDocumentFragment();
+  const list = (state.prompts.list || []).filter((q) => sessionOf(q) === id);
+  if (!list.length) {
+    frag.append(el('h2', { id: 'drawer-title', class: 'drawer-title' }, 'Session'),
+      el('p', { class: 'text-muted' }, state.prompts.list ? 'This session has no prompts in the time range.' : 'Loading the prompts…'));
+    return frag;
+  }
+  const first = list[0];
+  frag.append(el('h2', { id: 'drawer-title', class: 'drawer-title' }, sessionLabel({ cwd: first.cwd, host: first.host, prompts: list })));
+  frag.append(el('p', { class: 'drawer-meta' }, [first.cwd, first.session && 'session ' + first.session].filter(Boolean).join(' · ')));
+  frag.append(el('p', { class: 'drawer-meta' }, fmtDate(first.at) + ' → ' + fmtDate(list[list.length - 1].at) + ' · ' + list.length + ' prompts'));
+  const notes = el('div', { class: 'notes' });
+  for (const q of list) notes.append(el('div', { class: 'note' }, el('div', { class: 'note-at' }, fmtDate(q.at)), el('div', { class: 'note-text' }, q.prompt)));
+  frag.append(el('section', { class: 'drawer-section' }, el('h3', {}, 'Prompts'), notes));
+  return frag;
+}
+
+/* ---- memory tab: what the memstate memories say, and when Claude wrote them ---- */
+
+/** The projects and memories. With `refresh`, the texts and versions that the page has load again too. */
+async function loadMemoryOverview(opts) {
+  const m = state.memory;
+  m.loading = true;
+  try {
+    m.overview = await getJson('api/memory/overview');
+    m.error = null;
+    if (opts && opts.refresh) {
+      m.memories.clear();
+      m.histories.clear();
+    }
+  } catch (err) {
+    m.overview ||= { projects: [], memories: [] };
+    m.error = err.message;
+  }
+  m.loading = false;
+  render();
+}
+
+async function loadInto(map, key, url, pick) {
+  if (map.has(key)) return;
+  map.set(key, null); // loading
+  try { map.set(key, pick(await getJson(url))); } catch (err) { map.set(key, { error: err.message }); }
+  render();
+}
+
+function categoryChip(category) {
+  const lane = CATEGORY_COLORS[category];
+  return el('span', { class: 'chip chip-lane', style: '--chip-color:' + (lane ? 'var(--lane-' + lane + ')' : 'var(--text-muted)') }, category || 'memory');
+}
+
+const memKey = (project, keypath) => 'MEM:' + project + '|' + keypath;
+
+function selectProject(id) {
+  state.memory.project = id;
+  render();
+  const target = document.getElementById('mem-project');
+  if (target) target.scrollIntoView({ block: 'start' });
+}
+
+function renderProjectMemories(id) {
+  const wrap = el('section', { id: 'mem-project' }, el('h2', { class: 'section-title' }, 'Memories of ' + id));
+  const url = 'api/memory/project?id=' + encodeURIComponent(id);
+  const list = state.memory.memories.get(id);
+  if (list === undefined) loadInto(state.memory.memories, id, url, (json) => json.memories);
+  if (!list) { wrap.append(el('p', { class: 'empty-note' }, 'Loading…')); return wrap; }
+  if (list.error) { wrap.append(el('p', { class: 'load-error' }, list.error)); return wrap; }
+  const areas = new Map();
+  for (const x of list) {
+    const area = x.keypath.split('.')[0];
+    if (!areas.has(area)) areas.set(area, []);
+    areas.get(area).push(x);
+  }
+  for (const [area, items] of areas) {
+    items.sort((a, b) => b.created_at - a.created_at);
+    wrap.append(el('div', { class: 'mem-area' }, el('h3', {}, area), el('div', { class: 'mem-cards' }, items.map((x) =>
+      el('button', { type: 'button', class: 'mem-card', onclick: () => openTicket(memKey(id, x.keypath)) },
+        el('div', { class: 'card-top' }, categoryChip(x.category), el('span', { class: 'card-key' }, 'v' + x.version + ' · ' + fmtRelative(isoOf(x.created_at)))),
+        el('div', { class: 'mem-key' }, x.keypath),
+        el('div', { class: 'mem-preview' }, x.content || ''))))));
+  }
+  return wrap;
+}
+
+function renderMemory() {
+  $main.textContent = '';
+  const m = state.memory;
+  if (!m.overview) { $main.append(el('p', { class: 'empty-note' }, 'Loading the memories…')); return; }
+  if (m.error) $main.append(el('p', { class: 'load-error' }, 'Could not load the memories: ' + m.error));
+  const { projects, memories } = m.overview;
+  if (!projects.length) { if (!m.error) $main.append(el('p', { class: 'empty-note' }, 'memstate has no projects yet.')); return; }
+  const sorted = projects.slice().sort((a, b) => (b.last_updated_at || b.created_at) - (a.last_updated_at || a.created_at));
+  const byProject = new Map(sorted.map((p) => [p.id, []]));
+  for (const x of memories) if (byProject.has(x.project_id)) byProject.get(x.project_id).push(x);
+  $main.append(el('p', { class: 'view-note' }, projects.length + ' projects · ' + memories.length + ' memories. A dot is the last write of a memory.'));
+  $main.append(renderRowsChart({
+    rows: sorted,
+    ariaLabel: 'Projects and their memory writes',
+    label: (p) => p.id,
+    count: (p) => String(p.memory_count),
+    span: (p) => [p.created_at * 1000, (p.last_updated_at || p.created_at) * 1000],
+    onRow: (p) => selectProject(p.id),
+    marks: (p, scale, barY) => byProject.get(p.id).map((x) => {
+      const lane = CATEGORY_COLORS[x.category];
+      const dot = svgEl('circle', { cx: scale.x(x.created_at * 1000), cy: barY + TL_BAR_H / 2, r: 5, class: 'tl-dot', fill: lane ? 'var(--lane-' + lane + ')' : 'var(--text-muted)', tabindex: '0', role: 'img', 'aria-label': x.keypath + ', ' + fmtDate(isoOf(x.created_at)) });
+      attachTooltip(dot, () => el('div', {}, el('div', { class: 'tooltip-key' }, x.keypath), el('div', { class: 'tooltip-title' }, p.id), el('div', { class: 'tooltip-phase' }, (x.category || 'memory') + ' · v' + x.version + ' · ' + fmtDate(isoOf(x.created_at)))));
+      dot.addEventListener('click', () => openTicket(memKey(p.id, x.keypath)));
+      return dot;
+    }),
+  }));
+  $main.append(el('h2', { class: 'section-title' }, 'Latest writes'));
+  const latest = memories.slice().sort((a, b) => b.created_at - a.created_at).slice(0, 12);
+  $main.append(el('div', { class: 'row-list' }, latest.map((x) =>
+    el('button', { type: 'button', class: 'row-item', onclick: () => openTicket(memKey(x.project_id, x.keypath)) },
+      el('span', { class: 'row-meta' }, fmtDate(isoOf(x.created_at)), el('br'), x.project_id),
+      el('span', { class: 'row-text' }, categoryChip(x.category), ' ', x.keypath, x.version > 1 ? ' · v' + x.version : '')))));
+  if (!m.project || !byProject.has(m.project)) m.project = sorted[0].id;
+  $main.append(renderProjectMemories(m.project));
+}
+
+function buildMemoryDrawer(key) {
+  const cut = key.indexOf('|');
+  const project = key.slice(0, cut);
+  const keypath = key.slice(cut + 1);
+  const url = 'api/memory/history?project=' + encodeURIComponent(project) + '&keypath=' + encodeURIComponent(keypath);
+  const versions = state.memory.histories.get(key);
+  if (versions === undefined) loadInto(state.memory.histories, key, url, (json) => json.versions);
+  const frag = document.createDocumentFragment();
+  frag.append(el('h2', { id: 'drawer-title', class: 'drawer-title' }, keypath), el('p', { class: 'drawer-meta' }, 'memstate project ' + project));
+  if (!versions) { frag.append(el('p', { class: 'text-muted' }, 'Loading…')); return frag; }
+  if (versions.error) { frag.append(el('p', { class: 'load-error' }, versions.error)); return frag; }
+  const list = el('div', {});
+  for (const v of versions.slice().reverse()) {
+    list.append(el('div', { class: 'version' },
+      el('div', { class: 'drawer-chips' }, categoryChip(v.category), el('span', { class: 'chip' }, 'v' + v.version), el('span', { class: 'note-at' }, fmtDate(isoOf(v.created_at)))),
+      v.source ? el('p', { class: 'drawer-meta' }, v.source) : null,
+      el('p', { class: 'drawer-text' }, v.tombstone ? '(deleted)' : v.content)));
+  }
+  frag.append(el('section', { class: 'drawer-section' }, el('h3', {}, versions.length + (versions.length === 1 ? ' version' : ' versions') + ', newest first'), list));
+  return frag;
+}
+
 /* ---- detail drawer ---- */
 
 function renderDateGrid(idea) {
@@ -860,10 +1198,19 @@ function buildDrawerContent(idea) {
   return frag;
 }
 
+/** The content of the open drawer: a ticket, a session of the prompt log, or a memory. */
+function drawerContent(key) {
+  if (!key) return null;
+  if (key.startsWith('SESSION:')) return buildSessionDrawer(key.slice('SESSION:'.length));
+  if (key.startsWith('MEM:')) return buildMemoryDrawer(key.slice('MEM:'.length));
+  const idea = findByKey(key);
+  return idea ? buildDrawerContent(idea) : null;
+}
+
 function renderDrawer() {
-  const idea = state.openKey ? findByKey(state.openKey) : null;
+  const content = drawerContent(state.openKey);
   const wasHidden = $drawer.hidden;
-  if (!idea) {
+  if (!content) {
     if (!wasHidden) {
       $drawer.hidden = true;
       $drawerBackdrop.hidden = true;
@@ -876,7 +1223,7 @@ function renderDrawer() {
   $drawer.hidden = false;
   $drawerBackdrop.hidden = false;
   $drawerBody.textContent = '';
-  $drawerBody.append(buildDrawerContent(idea));
+  $drawerBody.append(content);
   if (wasHidden) requestAnimationFrame(() => $drawerClose.focus());
 }
 
@@ -928,7 +1275,7 @@ async function runAction(action, body, busyText) {
     showToast(worked ? 'Done, but the page could not load the new data: ' + err.message : err.message, 'error');
   }
   setBusy(false);
-  if (state.openKey && !findByKey(state.openKey)) {
+  if (/^IDEA-/.test(String(state.openKey)) && !findByKey(state.openKey)) {
     // The idea of the open ticket is gone: close the ticket without a new history entry.
     history.replaceState(null, '', '#' + state.view);
     state.openKey = null;
@@ -945,9 +1292,14 @@ function renderToolbar() {
   $readonlyNote.hidden = live;
   if (!live) return;
   const inbox = (state.data.counts && state.data.counts.inbox) || 0;
+  // Triage, Build, Ask, and the watcher need the Claude Code login: a server without it hides them.
+  const claude = !!state.data.live.claude;
   $triage.textContent = 'Triage inbox (' + inbox + ')';
   $triage.disabled = inbox === 0;
-  $buildNext.hidden = !state.data.live.window;
+  $triage.hidden = !claude;
+  $buildNext.hidden = !(claude && state.data.live.window);
+  $askOpen.hidden = !claude;
+  $watchLabel.hidden = !claude;
   const watch = state.data.live.watch || {};
   $watchToggle.checked = !!watch.on;
   $watchLabel.title = watch.status || '';
@@ -966,7 +1318,7 @@ function renderDrawerActions(idea) {
   const update = (patch) => runAction('update', Object.assign({ id }, patch));
 
   const buttons = [];
-  if (!closed && state.data.live.window) {
+  if (!closed && state.data.live.window && state.data.live.claude) {
     buttons.push(actionButton('Build with Claude', 'primary', () => runAction('go', { id }, 'Opening Claude Code for ' + idea.key + '…'),
       'Open Claude Code on the recommended model, in the project of the idea (/ideas-go ' + id + ')'));
   }
@@ -1061,17 +1413,25 @@ function render() {
   if (state.query.trim() !== '') renderSearch();
   else if (state.view === 'timeline') renderTimeline();
   else if (state.view === 'groups') renderGroups();
+  else if (state.view === 'prompts') renderPrompts();
+  else if (state.view === 'memory') renderMemory();
   else renderBoard();
   renderDrawer();
+  // The prompt log and the memories load when a tab or a drawer needs them.
+  const wantsPrompts = state.view === 'prompts' || String(state.openKey).startsWith('SESSION:');
+  if (wantsPrompts && !state.prompts.list && !state.prompts.loading) loadPrompts();
+  if (state.view === 'memory' && !state.memory.overview && !state.memory.loading) loadMemoryOverview();
 }
 
 function applyHash() {
   const raw = decodeURIComponent(location.hash.slice(1));
-  if (raw === 'board' || raw === 'timeline' || raw === 'groups') {
+  if (VIEWS.includes(raw)) {
     state.view = raw;
     state.openKey = null;
   } else if (/^IDEA-\d+$/i.test(raw)) {
     state.openKey = raw.toUpperCase();
+  } else if (/^(SESSION|MEM):/.test(raw)) {
+    state.openKey = raw;
   } else {
     state.openKey = null;
     if (raw) state.view = 'board';
@@ -1122,6 +1482,9 @@ function bindStaticEvents() {
   // The watcher and other sessions change the archive too. Show their changes when the page comes back.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || !isLive() || state.busy) return;
+    // The old data stays on the page until the new data is here, so nothing flickers.
+    if (state.prompts.list && !state.prompts.loading) loadPrompts();
+    if (state.memory.overview && !state.memory.loading) loadMemoryOverview({ refresh: true });
     loadData().then(render, () => {});
   });
 }

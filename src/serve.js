@@ -1,8 +1,15 @@
-// The dashboard with buttons. `ideamine serve` runs a web server on this PC. It serves the page of
-// `ideamine publish`, a live data.json, and an API for the slash commands: add, delete, done,
-// reopen, start, drop, note, model, triage, build, ask, and the watcher. The archive and the Claude
-// Code login are on this PC, so the commands run here. The server listens on 127.0.0.1 only, and
-// it takes commands only from its own page.
+// The dashboard with buttons. `ideamine serve` runs a web server that serves the page of `ideamine
+// publish`, a live data.json, and an API for the slash commands: add, delete, done, reopen, start,
+// drop, note, model, triage, build, ask, and the watcher. It has two roles:
+//
+// - On a PC, it runs the commands there, where the Claude Code login is. When sync is on, the
+//   archive that it changes is on the ideamine server, and the Prompts and Memory tabs come from
+//   there too.
+// - On a server (sync off), it holds the archive for every machine: the machines sync with /api/db
+//   and /api/ops, and send their prompts to /api/prompts. With memstate_url, the Memory tab shows
+//   the memories of a memstated daemon. nginx in front of it names the server in serve_hosts.
+//
+// The server listens on 127.0.0.1 only, and it takes commands only from its own page.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -10,10 +17,12 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as archive from './archive.js';
 import * as config from './config.js';
 import * as publish from './publish.js';
 import { renderAdded, stamp } from './render.js';
 import * as store from './store.js';
+import * as sync from './sync.js';
 import { clip, splitIdeas } from './text.js';
 import * as watch from './watch.js';
 
@@ -22,8 +31,12 @@ const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 const MAX_BODY = 1024 * 1024;
 const EMBED_TIMEOUT_MS = 5000; // data.json must not wait long for an embedding server that is away
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
+const DAY = 86400000;
+const APPLIED_KEPT = 1000; // results of recent changes, so that a change that comes twice applies once
 
 const logPath = () => path.join(store.home(), 'serve.log');
+const promptsPath = () => path.join(store.home(), 'prompts.jsonl');
+const appliedPath = () => path.join(store.home(), 'applied.json');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The port from the setting serve_port. */
@@ -36,14 +49,17 @@ export function port() {
 
 export const address = (p = port()) => `http://127.0.0.1:${p}/`;
 
+/** The Host names from the setting serve_hosts, for example the address that nginx answers on. */
+const extraHosts = () => config.get('serve_hosts').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+
 /**
  * True when the server may answer a request. The Host header must name this server, which stops a
  * DNS rebinding page. A POST must send JSON, and its Origin, if any, must be this server. A page of
  * another site cannot send JSON here without a CORS preflight, and this server allows none.
  */
-export function allowed({ method, host, origin, type }, port) {
+export function allowed({ method, host, origin, type }, port, hosts = []) {
   const h = String(host ?? '').toLowerCase();
-  if (h !== `127.0.0.1:${port}` && h !== `localhost:${port}`) return false;
+  if (h !== `127.0.0.1:${port}` && h !== `localhost:${port}` && !hosts.includes(h)) return false;
   if (method === 'GET' || method === 'HEAD') return true;
   if (method !== 'POST' || !/^application\/json\s*(;|$)/i.test(String(type ?? '').trim())) return false;
   return origin == null || origin === `http://${h}`;
@@ -119,9 +135,23 @@ async function readJson(req) {
 
 /** The snapshot of `ideamine publish`, and `live`: what only this server can tell the page. */
 async function liveData() {
-  const { data, note } = await publish.build(store.load(), { timeoutMs: EMBED_TIMEOUT_MS });
+  const db = await archive.fresh();
+  const { data, note } = await publish.build(db, { timeoutMs: EMBED_TIMEOUT_MS });
+  const { hasClaude } = await import('./claude.js');
   const w = watch.readState();
-  return { ...data, live: { note, window: process.platform === 'win32', watch: { on: !!w.on, status: watch.status() } } };
+  const synced = sync.enabled();
+  return {
+    ...data,
+    live: {
+      note,
+      window: process.platform === 'win32',
+      claude: hasClaude(),
+      watch: { on: !!w.on, status: watch.status() },
+      sync: synced ? { url: sync.serverUrl(), offline: archive.offlineReason(), waiting: sync.waiting() } : null,
+      prompts: synced || fs.existsSync(promptsPath()),
+      memory: synced || !!config.get('memstate_url'),
+    },
+  };
 }
 
 /** Search by meaning on the page: the page sends its query to the embedding server through here. */
@@ -142,24 +172,175 @@ async function proxyEmbeddings(req, res) {
   res.end(Buffer.from(await upstream.arrayBuffer()));
 }
 
+/** A read of the Prompts or Memory tab on a PC with sync on: the ideamine server answers it. */
+async function forward(res, route) {
+  const target = new URL(route, sync.serverUrl());
+  let upstream;
+  try {
+    upstream = await fetch(target, { signal: AbortSignal.timeout(15000) });
+  } catch {
+    return send(res, 502, { ok: false, error: `cannot reach ${target.origin}` });
+  }
+  res.writeHead(upstream.status, { ...HEADERS, 'content-type': upstream.headers.get('content-type') || 'application/json' });
+  res.end(Buffer.from(await upstream.arrayBuffer()));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The server role: the archive for every machine, the prompt log, and the memories.
+
+// A change from a machine. Each result is small, because the machine reads the archive that comes
+// with the answer.
+const CHANGES = {
+  add: (op) =>
+    store
+      .addIdeas(op.texts, { source: op.source, project: op.project, session: op.session, tags: op.tags, host: op.host })
+      .map(({ idea, similar }) => ({ id: idea.id, similar })),
+  update: (op) => ({ id: store.updateIdea(op.id, op.patch || {}).id }),
+  remove: (op) => store.removeIdeas(op.ids || []),
+  triage: (op) => store.applyTriage(op.verdicts, { by: op.by, projects: op.projects }),
+};
+
+function readApplied() {
+  try {
+    return JSON.parse(fs.readFileSync(appliedPath(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Apply changes in order. A change that came before (the same oid) is not applied again: its first
+ * result comes back. A machine sends a change again when an answer got lost on the way.
+ */
+function applyChanges(ops) {
+  if (!Array.isArray(ops)) throw new Error('ops must be a list');
+  const applied = readApplied();
+  const results = ops.map((op) => {
+    if (op?.oid && applied[op.oid]) return applied[op.oid];
+    let result;
+    try {
+      if (!op || !Object.hasOwn(CHANGES, op.op)) throw new Error(`unknown change "${op?.op}"`);
+      result = { ok: true, value: CHANGES[op.op](op) };
+    } catch (e) {
+      result = { ok: false, error: e.message };
+    }
+    if (op?.oid) applied[op.oid] = result;
+    return result;
+  });
+  const kept = Object.entries(applied).slice(-APPLIED_KEPT);
+  store.withLock(() => store.writeAtomic(appliedPath(), JSON.stringify(Object.fromEntries(kept))));
+  return results;
+}
+
+let promptCache = null;
+
+/** The prompt log: one JSON line for each prompt. The copy in memory is kept until the file changes. */
+function loadPrompts() {
+  const st = fs.statSync(promptsPath(), { throwIfNoEntry: false });
+  if (!st) return { prompts: [], ids: new Set() };
+  if (promptCache?.mtime === st.mtimeMs && promptCache.size === st.size) return promptCache;
+  const prompts = [];
+  for (const line of fs.readFileSync(promptsPath(), 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      prompts.push(JSON.parse(line));
+    } catch {
+      // A line that a crash cut in half.
+    }
+  }
+  promptCache = { mtime: st.mtimeMs, size: st.size, prompts, ids: new Set(prompts.map((p) => p.id)) };
+  return promptCache;
+}
+
+const field = (v, max = 300) => (v == null ? null : String(v).slice(0, max));
+
+/** Add prompts that the log does not have yet. A prompt without an id, a time, or a text is skipped. */
+function addPrompts(list) {
+  if (!Array.isArray(list)) throw new Error('prompts must be a list');
+  const { ids } = loadPrompts();
+  const add = [];
+  let skipped = 0;
+  for (const p of list) {
+    const bad = !p || typeof p.id !== 'string' || !p.id || typeof p.prompt !== 'string' || Number.isNaN(Date.parse(p.at));
+    if (bad) skipped++;
+    if (bad || ids.has(p.id)) continue;
+    ids.add(p.id);
+    add.push({ id: p.id.slice(0, 64), at: new Date(p.at).toISOString(), host: field(p.host, 100), session: field(p.session, 100), cwd: field(p.cwd), prompt: p.prompt });
+  }
+  if (add.length) store.withLock(() => fs.appendFileSync(promptsPath(), add.map((p) => `${JSON.stringify(p)}\n`).join('')));
+  return { added: add.length, skipped };
+}
+
+/** The prompts of the last `days` days (all prompts for 0), oldest first. */
+function listPrompts(days) {
+  const since = days > 0 ? Date.now() - days * DAY : 0;
+  return loadPrompts().prompts.filter((p) => Date.parse(p.at) >= since).sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** A read from the memstated daemon at memstate_url. */
+async function memstate(route, body) {
+  const base = config.get('memstate_url');
+  if (!base) throw new Error('this server shows no memories. Set memstate_url, for example: ideamine config memstate_url http://127.0.0.1:8765');
+  const url = `${base.replace(/\/+$/, '')}${route}`;
+  const init = { signal: AbortSignal.timeout(8000) };
+  if (body) Object.assign(init, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  let res;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    throw new Error(`cannot reach memstated at ${base}`);
+  }
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`memstated answered ${res.status}: ${json?.error || 'no reason'}`);
+  return json;
+}
+
+// The Memory tab reads memstated. It never writes there.
+const MEMORY = {
+  /** Every project, and every current memory without its text, for the list and the timeline. */
+  async overview() {
+    const { projects } = await memstate('/api/v1/projects');
+    const memories = [];
+    for (const p of projects) {
+      const { memories: list } = await memstate('/api/v1/keypaths', { project_id: p.id });
+      for (const m of list) memories.push({ id: m.id, project_id: p.id, keypath: m.keypath, category: m.category || null, version: m.version, created_at: m.created_at });
+    }
+    return { projects, memories };
+  },
+  /** The current memories of one project, with their text. */
+  async project(query) {
+    const { memories } = await memstate('/api/v1/keypaths', { project_id: query.get('id') || '', include_content: true });
+    return { memories };
+  },
+  /** Every version of one memory, oldest first. */
+  async history(query) {
+    const { versions } = await memstate('/api/v1/memories/history', { project_id: query.get('project') || '', keypath: query.get('keypath') || '' });
+    return { versions };
+  },
+};
+
+// ---------------------------------------------------------------------------------------------
 // The slash commands. Each one takes the JSON body and returns the text to show on the page.
+
 const ACTIONS = {
   /** /idea. A bulleted list adds one idea per bullet. */
-  add({ text }) {
-    const results = store.addIdeas(splitIdeas(String(text ?? '')), { source: 'web' });
-    return renderAdded(results, store.load());
+  async add({ text }) {
+    const results = await archive.add(splitIdeas(String(text ?? '')), { source: 'web' });
+    return results.queued ? archive.queuedText(results) : renderAdded(results, store.load());
   },
 
   /** /ideas-rm. An unknown id deletes nothing. */
-  rm({ ids }) {
+  async rm({ ids }) {
     if (!Array.isArray(ids) || !ids.length) throw new Error('name the ideas to delete');
-    return store.removeIdeas(ids).map((i) => `Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
+    const gone = await archive.remove(ids);
+    return gone.queued ? archive.queuedText(gone) : gone.map((i) => `Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
   },
 
   /** /ideas-done, /ideas-reopen, and the verbs start, drop, note, and model of the CLI. */
-  update({ id, status, note, model }) {
+  async update({ id, status, note, model }) {
     if (!status && !note && !model) throw new Error('nothing to change');
-    const idea = store.updateIdea(id, { status, note, model });
+    const idea = await archive.update(id, { status, note, model });
+    if (idea.queued) return archive.queuedText(idea);
     const bits = [`#${idea.id} ${clip(idea.title, 60)} → ${store.lane(idea)}`];
     if (model) bits.push(`model ${idea.triage.model}`);
     if (note) bits.push('note added');
@@ -187,12 +368,12 @@ const ACTIONS = {
     } catch (e) {
       lines.push(`Triage failed: ${e.message}`);
     }
-    const db = store.load();
+    const db = await archive.fresh();
     const idea = id != null ? store.findIdea(db, id) : store.pickNext(db);
     if (!idea) throw new Error(id != null ? `no idea #${id}` : 'Nothing is ready to build. Triage the inbox first.');
     const { model, dir } = goPlan(idea, os.homedir());
     await open([BIN, 'go', String(idea.id)], dir);
-    store.updateIdea(idea.id, { status: 'doing' });
+    await archive.update(idea.id, { status: 'doing' });
     lines.push(`Opened Claude Code (${model}) in ${dir} for #${idea.id} · ${clip(idea.title, 60)}`);
     return lines.join('\n\n');
   },
@@ -218,11 +399,27 @@ const ACTIONS = {
 // These actions do not change the archive, so the dashboard server needs no new upload.
 const READ_ONLY = new Set(['ask', 'watch']);
 
-async function handle(req, res, ctx) {
-  if (!allowed({ method: req.method, host: req.headers.host, origin: req.headers.origin, type: req.headers['content-type'] }, ctx.port)) {
-    return send(res, 403, { ok: false, error: 'forbidden' });
+/** The reads and changes of the server role. Resolves to false for a route that it does not have. */
+async function serverRoute(req, res, route, query) {
+  if (route === 'GET /api/db') return send(res, 200, { ok: true, db: store.load() });
+  if (route === 'POST /api/ops') {
+    const { ops } = await readJson(req);
+    return send(res, 200, { ok: true, results: applyChanges(ops), db: store.load() });
   }
-  const { pathname } = new URL(req.url, 'http://127.0.0.1');
+  if (route === 'POST /api/prompts') {
+    const { prompts } = await readJson(req);
+    return send(res, 200, { ok: true, ...addPrompts(prompts) });
+  }
+  if (route === 'GET /api/prompts') return send(res, 200, { ok: true, prompts: listPrompts(Number(query.get('days')) || 0) });
+  const memory = route.startsWith('GET /api/memory/') && route.slice('GET /api/memory/'.length);
+  if (memory && Object.hasOwn(MEMORY, memory)) return send(res, 200, { ok: true, ...(await MEMORY[memory](query)) });
+  return false;
+}
+
+async function handle(req, res, ctx) {
+  const request = { method: req.method, host: req.headers.host, origin: req.headers.origin, type: req.headers['content-type'] };
+  if (!allowed(request, ctx.port, extraHosts())) return send(res, 403, { ok: false, error: 'forbidden' });
+  const { pathname, search, searchParams } = new URL(req.url, 'http://127.0.0.1');
   const route = `${req.method === 'HEAD' ? 'GET' : req.method} ${pathname}`;
   if (route === 'GET /' || route === 'GET /index.html') return sendPage(res);
   if (route === 'GET /data.json') return send(res, 200, await liveData());
@@ -235,6 +432,15 @@ async function handle(req, res, ctx) {
     send(res, 200, { ok: true, message: 'stopped' }, { connection: 'close' });
     ctx.server.close();
     return;
+  }
+  if (sync.enabled()) {
+    if (route === 'GET /api/prompts' || route.startsWith('GET /api/memory/')) return forward(res, `${pathname.slice(1)}${search}`);
+  } else {
+    try {
+      if ((await serverRoute(req, res, route, searchParams)) !== false) return;
+    } catch (e) {
+      return send(res, 400, { ok: false, error: e.message });
+    }
   }
   const action = route.startsWith('POST /api/') ? route.slice('POST /api/'.length) : '';
   if (!Object.hasOwn(ACTIONS, action)) return send(res, 404, { ok: false, error: 'not found' });

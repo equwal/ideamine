@@ -2,6 +2,7 @@
 // Writers take a directory lock and replace the file atomically, so concurrent sessions,
 // the hook, and the CLI can all write at once without losing ideas.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -116,8 +117,29 @@ export function writeAtomic(file, text, { backup = false } = {}) {
   renameWithRetry(tmp, file);
 }
 
+/**
+ * Write the archive. `uid` names this archive and `rev` counts its writes, so that a machine that
+ * syncs with a server can tell an old copy of the server's archive from a new one.
+ */
 function save(db) {
+  db.uid ||= crypto.randomUUID();
+  db.rev = (Number(db.rev) || 0) + 1;
   writeAtomic(dbPath(), JSON.stringify(db, null, 2) + '\n', { backup: true });
+}
+
+/**
+ * The absolute form of a project folder. On a POSIX server, a Windows path from a machine that
+ * syncs with it stays as that machine wrote it.
+ */
+export function absolute(dir, platform = process.platform) {
+  const s = String(dir);
+  if (platform !== 'win32' && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(s)) return s;
+  return path.resolve(s);
+}
+
+/** The last part of a folder path, for Windows and POSIX paths on any machine. */
+export function baseName(dir) {
+  return String(dir).split(/[\\/]+/).filter(Boolean).pop() || String(dir);
 }
 
 /** Run `fn` while this process holds the archive lock. Other files in home() can share the lock. */
@@ -236,7 +258,7 @@ function similarTo(db, text, excludeId) {
 // ---------------------------------------------------------------------------------------------
 // Mutations
 
-export function addIdeas(texts, { source = 'mcp', project = null, session = null, tags = [] } = {}) {
+export function addIdeas(texts, { source = 'mcp', project = null, session = null, tags = [], host = null } = {}) {
   const items = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? '').trim()).filter(Boolean);
   if (!items.length) throw new Error('idea text is empty');
   return mutate((db) =>
@@ -249,7 +271,7 @@ export function addIdeas(texts, { source = 'mcp', project = null, session = null
         text,
         status: 'inbox',
         tags: normalizeTags([...extractTags(text), ...normalizeTags(tags)]),
-        project: project ? path.resolve(project) : null,
+        project: project ? absolute(project) : null,
         source,
         created: stamp,
         updated: stamp,
@@ -257,6 +279,7 @@ export function addIdeas(texts, { source = 'mcp', project = null, session = null
         notes: [],
       };
       if (session) idea.session = String(session);
+      if (host) idea.host = String(host);
       db.ideas.push(idea);
       return { idea, similar };
     }),
@@ -355,7 +378,7 @@ export function updateIdea(id, patch = {}) {
     if (patch.title) idea.title = clip(patch.title, 90);
     else if (patch.text) idea.title = deriveTitle(idea.text);
     if (Array.isArray(patch.tags)) idea.tags = normalizeTags(patch.tags);
-    if (patch.project !== undefined) idea.project = patch.project ? path.resolve(patch.project) : null;
+    if (patch.project !== undefined) idea.project = patch.project ? absolute(patch.project) : null;
     if (patch.model) {
       const model = normalizeModel(patch.model);
       if (!model) throw new Error(`model must be one of ${MODEL_ALIASES.join(', ')}`);

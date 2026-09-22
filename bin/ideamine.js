@@ -26,6 +26,8 @@ const HELP = `ideamine: an idea inbox for Claude Code
                                   upload the dashboard (index.html, data.json) now; a url also turns
                                   on the upload after each change; --dir writes the files to a folder
   ideamine serve [--port 4332]    the dashboard with a button for each command, at 127.0.0.1
+  ideamine sync [url|off]         share the archive of every machine through an ideamine server
+  ideamine prompts import         put the prompts of older Claude Code chats into the prompt log
   ideamine config [key [value]]   show or change a setting (an empty value restores the default)
   ideamine export [file.md]       Markdown export of the whole archive
   ideamine path                   where the archive lives (override with IDEAMINE_HOME)
@@ -71,36 +73,40 @@ async function main() {
   if (command === 'hook') return (await import('../src/hook.js')).runHook();
 
   const store = await import('../src/store.js');
+  const archive = await import('../src/archive.js');
   const render = await import('../src/render.js');
   const { splitIdeas, clip } = await import('../src/text.js');
   const { flags, words } = parseArgs(rest);
   const cwd = process.cwd();
   const needId = () => words[0] || fail(`usage: ideamine ${command} <id>`);
+  // A change that waits for the ideamine server: say so, and go on.
+  const queued = (out) => out.queued && (console.log(archive.queuedText(out)), true);
 
   switch (command) {
     case 'add': {
       const text = words.length === 1 && words[0] === '-' ? await readStdin() : words.join(' ');
-      const results = store.addIdeas(splitIdeas(text), { source: 'cli', project: flags['no-project'] ? null : cwd });
-      console.log(render.renderAdded(results, store.load()));
+      const results = await archive.add(splitIdeas(text), { source: 'cli', project: flags['no-project'] ? null : cwd });
+      if (!queued(results)) console.log(render.renderAdded(results, store.load()));
       break;
     }
     case 'ls': {
       const lower = words.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
       const filter = lower.find((w) => store.FILTERS.includes(w)) || 'open';
       const here = lower.includes('here') || flags.here;
-      console.log(render.renderBoard(store.load(), { filter, project: here ? cwd : null, query: flags.query || '', cwd }));
+      console.log(render.renderBoard(await archive.fresh(), { filter, project: here ? cwd : null, query: flags.query || '', cwd }));
       break;
     }
     case 'cat': {
       needId();
-      const db = store.load();
+      const db = await archive.fresh();
       const ideas = words.map((id) => store.findIdea(db, id) || fail(`no idea #${id.replace(/^#/, '')}`));
       console.log(ideas.map(render.renderIdea).join('\n\n'));
       break;
     }
     case 'rm': {
       needId();
-      for (const idea of store.removeIdeas(words)) console.log(`Removed #${idea.id} ${clip(idea.title, 60)}`);
+      const gone = await archive.remove(words);
+      if (!queued(gone)) for (const idea of gone) console.log(`Removed #${idea.id} ${clip(idea.title, 60)}`);
       break;
     }
     case 'done':
@@ -110,23 +116,23 @@ async function main() {
     case 'reopen': {
       const status = { drop: 'dropped', start: 'doing' }[command] || command;
       const note = words.slice(1).join(' ');
-      const idea = store.updateIdea(needId(), { status, note: note || undefined });
-      console.log(`#${idea.id} ${clip(idea.title, 60)} → ${store.lane(idea)}`);
+      const idea = await archive.update(needId(), { status, note: note || undefined });
+      if (!queued(idea)) console.log(`#${idea.id} ${clip(idea.title, 60)} → ${store.lane(idea)}`);
       break;
     }
     case 'note': {
       const note = words.slice(1).join(' ') || fail('usage: ideamine note <id> <text>');
-      const idea = store.updateIdea(needId(), { note });
-      console.log(`#${idea.id}: note added`);
+      const idea = await archive.update(needId(), { note });
+      if (!queued(idea)) console.log(`#${idea.id}: note added`);
       break;
     }
     case 'model': {
-      const idea = store.updateIdea(needId(), { model: words[1] || fail('usage: ideamine model <id> <haiku|sonnet|opus|fable>') });
-      console.log(`#${idea.id} will be built with ${idea.triage.model}`);
+      const idea = await archive.update(needId(), { model: words[1] || fail('usage: ideamine model <id> <haiku|sonnet|opus|fable>') });
+      if (!queued(idea)) console.log(`#${idea.id} will be built with ${idea.triage.model}`);
       break;
     }
     case 'next': {
-      const idea = store.pickNext(store.load(), { project: cwd, only: !!flags.here });
+      const idea = store.pickNext(await archive.fresh(), { project: cwd, only: !!flags.here });
       if (!idea) {
         console.log('Nothing is ready to build. Triage the inbox first: ideamine sort');
         break;
@@ -136,7 +142,7 @@ async function main() {
     }
     case 'go': {
       const { goPlan, launchSession } = await import('../src/claude.js');
-      const db = store.load();
+      const db = await archive.fresh();
       const idea = words[0] ? store.findIdea(db, words[0]) : store.pickNext(db, { project: cwd });
       if (!idea) fail(words[0] ? `no idea #${words[0]}` : 'nothing is ready to build; run: ideamine sort');
       const { model, dir, prompt } = goPlan(idea, cwd);
@@ -144,7 +150,7 @@ async function main() {
         console.log(`directory: ${dir}\nmodel:     ${model}\n\n${prompt}`);
         break;
       }
-      store.updateIdea(idea.id, { status: 'doing' });
+      queued(await archive.update(idea.id, { status: 'doing' }));
       console.log(`Opening Claude Code (${model}) in ${dir} for #${idea.id}…`);
       process.exitCode = launchSession({ model, prompt, cwd: dir });
       break;
@@ -186,14 +192,14 @@ async function main() {
     case 'find': {
       const embed = await import('../src/embed.js');
       const query = words.join(' ') || fail('usage: ideamine find <words...>');
-      console.log(render.renderFound(await embed.find(store.load(), query), query, { cwd }));
+      console.log(render.renderFound(await embed.find(await archive.fresh(), query), query, { cwd }));
       break;
     }
     case 'groups': {
       const embed = await import('../src/embed.js');
       const lower = words.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
       const filter = lower.find((w) => store.FILTERS.includes(w)) || 'open';
-      const ideas = store.listIdeas(store.load(), { filter });
+      const ideas = store.listIdeas(await archive.fresh(), { filter });
       console.log(render.renderGroups(await embed.groupIdeas(ideas), ideas, { cwd, scope: filter }));
       break;
     }
@@ -230,6 +236,34 @@ async function main() {
       console.log(serve.logLine(`the dashboard with buttons runs at ${url} (Ctrl+C stops it)`));
       break;
     }
+    case 'sync': {
+      const sync = await import('../src/sync.js');
+      if (flags.background) {
+        process.exitCode = (await sync.backgroundSync()) === 'error' ? 1 : 0;
+        break;
+      }
+      if (words[0]) {
+        const backup = sync.setServer(words[0] === 'off' ? '' : words[0]);
+        if (backup) console.log(`The archive that was here is in ${backup}.`);
+      }
+      if (sync.enabled()) {
+        try {
+          await sync.pull({ timeoutMs: 30000, prompts: true });
+        } catch (e) {
+          if (!(e instanceof sync.SyncError)) throw e;
+          process.exitCode = 1;
+        }
+      }
+      console.log(sync.status());
+      break;
+    }
+    case 'prompts': {
+      const sync = await import('../src/sync.js');
+      if (words[0] !== 'import') fail('usage: ideamine prompts import');
+      if (!sync.enabled()) fail('the prompt log goes to an ideamine server. Turn sync on first: ideamine sync <url>');
+      console.log(`Put ${sync.importPrompts()} prompts from ${sync.transcriptsDir()} into the prompt outbox. The next sync sends them.`);
+      break;
+    }
     case 'config': {
       const config = await import('../src/config.js');
       if (words.length >= 1 && rest.length >= 2) config.set(words[0], words.slice(1).join(' '));
@@ -241,7 +275,7 @@ async function main() {
       break;
     }
     case 'export': {
-      const md = render.renderMarkdown(store.load());
+      const md = render.renderMarkdown(await archive.fresh());
       if (words[0]) {
         fs.writeFileSync(words[0], md);
         console.log(`Wrote ${words[0]}`);

@@ -45,6 +45,7 @@ Marketplaces you add yourself do not auto-update. To upgrade, run `claude plugin
 | `/ideas-find sync subtitles` | Search every lane by meaning, not only by the words. See [Search by meaning](#search-by-meaning-and-groups). | **No** |
 | `/ideas-groups` · `done` · `-a` | Show the ideas grouped by meaning | **No** |
 | `/ideas-web` · `off` | Start the dashboard with a button for each command on this PC, and show its address. See [Buttons](#buttons). | **No** |
+| `/ideas-sync <url>` · `off` | Share one archive between all your machines through an ideamine server. See [One archive for every machine](#one-archive-for-every-machine). | **No** |
 | `/ideas-go [12]` | Build the idea that fits this chat, else the first in the queue, or #12, on its recommended model. New ideas are triaged first. | Yes, this is the build |
 | `/ideas-all` | Claude reads every idea, takes the ones that fit this chat out of the queue, and does them. The others stay in the queue. | Yes, this is the build |
 | `/ideas-sort` | Triage the inbox now and show the queue. You do not have to: `/ideas-go` triages when it must. | Yes, briefly |
@@ -153,7 +154,44 @@ server {
 
 The board, the timeline, the groups, and the search show `/ideas`, `/ideas-ls`, `/ideas-cat`, `/ideas-groups`, and `/ideas-find`. `/ideas-all` has no button, because it needs the chat that it works in.
 
-The commands run on your PC, because the archive and your Claude Code login are there. Thus the server listens on `127.0.0.1` only, and it takes commands only from its own page: each command must be JSON from the same origin, and the Host header must name the server. Another web page in your browser cannot send commands to it, and no other page can show it in a frame. After a change, the server uploads the dashboard again when `publish_url` is set, so the copy on your dashboard server stays current. That copy has no buttons: it shows "Read-only copy". `/ideas-web off` stops the server. In a terminal, `ideamine serve` runs it in the foreground. To use another port, run `ideamine config serve_port 5000`. The log is `~/.ideamine/serve.log`.
+Triage, Build, Ask, and the watcher need the Claude Code login, so they show only where Claude Code runs. The commands run on your PC, because your Claude Code login is there. Thus the server listens on `127.0.0.1` only, and it takes commands only from its own page: each command must be JSON from the same origin, and the Host header must name the server. Another web page in your browser cannot send commands to it, and no other page can show it in a frame. After a change, the server uploads the dashboard again when `publish_url` is set, so the copy on your dashboard server stays current. That copy has no buttons: it shows "Read-only copy". `/ideas-web off` stops the server. In a terminal, `ideamine serve` runs it in the foreground. To use another port, run `ideamine config serve_port 5000`. The log is `~/.ideamine/serve.log`.
+
+## One archive for every machine
+
+```
+> /ideas-sync http://10.66.0.1/
+  ideamine sync: http://10.66.0.1/
+  last sync 2026-09-21 19:24, revision 212.
+```
+
+Without sync, each machine has its own archive. With sync, an ideamine server holds one archive, and every Claude on every machine reads and changes it. The server is `ideamine serve` on a machine that all your machines can reach, for example a small VPS on a WireGuard network. Its page is the same dashboard for every machine.
+
+Each machine keeps a copy of the archive, so that `/ideas` and the other reads stay fast. A change goes into an outbox on the machine first, and then to the server. If the server does not answer, for example because the tunnel is down, the change waits in the outbox and goes with the next sync. Thus no idea is lost. `/idea` then says "Saved here", and `/ideas` says that it shows the copy on this machine. The server applies each change only once, also when a machine sends it twice. A background sync after your prompts sends what waits, and it gets the changes of the other machines at most once a minute. Prompts for the prompt log go at most every 20 seconds, so that a prompt does not start a process each time. The first `/ideas-sync` saves the archive that was on the machine as `ideas.before-sync-<date>.json`, because the archive of the server takes its place.
+
+On the server, sync stays off. It serves the archive, and nginx gives it the address of the WireGuard interface:
+
+```bash
+IDEAMINE_HOME=/var/lib/ideamine IDEAMINE_SERVE_HOSTS=10.66.0.1 ideamine serve --port 4332
+```
+
+```nginx
+server {
+    listen 10.66.0.1:80;
+    allow 10.66.0.0/24;
+    deny all;
+    location / { proxy_pass http://127.0.0.1:4332; proxy_set_header Host $host; client_max_body_size 2m; }
+    location /v1/ { proxy_pass http://127.0.0.1:8081; }   # the embedding server
+}
+```
+
+`serve_hosts` names the Host that nginx sends. Without it, the server refuses the request, so a DNS rebinding page cannot reach the archive. The server does not ask who you are: the network decides who can reach it. Put it only on a private network like WireGuard.
+
+### Prompts and Memory
+
+The dashboard can also show what your Claudes did:
+
+- **Prompts**: each prompt that you typed, on every machine, as a timeline of sessions. `ideamine config prompt_log on` sends each prompt to the ideamine server in the background. The full text goes, without the notes that Claude Code puts into a prompt; a paste longer than 100,000 characters is cut. `ideamine prompts import` sends the prompts of your older chats from the Claude Code transcripts.
+- **Memory**: the memories of a [memstate](https://github.com/map588/memstate) daemon: a timeline of the writes of each project, the latest writes, and each memory with its versions. Set `memstate_url` on the server, for example `http://127.0.0.1:8765`. The dashboard only reads memstate.
 
 ## Model routing
 
@@ -199,6 +237,8 @@ ideamine groups [-a]                              # ideas grouped by meaning
 ideamine embed                                    # embed new ideas, show the similarity numbers
 ideamine publish [url|off] [--dir folder]         # the dashboard (see above)
 ideamine serve [--port 4332]                      # the dashboard with buttons, on 127.0.0.1
+ideamine sync [url|off]                           # one archive for every machine (see above)
+ideamine prompts import                           # the prompts of older chats, for the Prompts tab
 ideamine config [key [value]]                     # show or change a setting
 ideamine export IDEAS.md                          # Markdown copy of everything
 ```
@@ -219,7 +259,7 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 
 ## Where your ideas live
 
-`~/.ideamine/ideas.json` is plain, readable JSON. Set `IDEAMINE_HOME` to move it, for example into a synced folder. Each write takes a lock and then replaces the file in one step, so many sessions can write at the same time without losing an idea. The previous version is kept as `ideas.json.bak`. If the file becomes damaged, ideamine stops and does not overwrite it. Nothing leaves your machine, except in these cases: triage and builds go through Claude as usual; search by meaning and groups send the text of your ideas to the embedding server that you set; `ideamine publish` uploads a snapshot to the dashboard server that you set. So that it can pair ideas with projects, the triage also sends the paths of your project folders and the first line of each README.
+`~/.ideamine/ideas.json` is plain, readable JSON. Set `IDEAMINE_HOME` to move it, for example into a synced folder. Each write takes a lock and then replaces the file in one step, so many sessions can write at the same time without losing an idea. The previous version is kept as `ideas.json.bak`. If the file becomes damaged, ideamine stops and does not overwrite it. Nothing leaves your machine, except in these cases: triage and builds go through Claude as usual; search by meaning and groups send the text of your ideas to the embedding server that you set; `ideamine publish` uploads a snapshot to the dashboard server that you set; with sync on, the archive is on the ideamine server, and with the prompt log on, your prompts go there too. So that it can pair ideas with projects, the triage also sends the paths of your project folders and the first line of each README.
 
 `ideamine config` shows each setting and where its value comes from. `ideamine config <key> <value>` saves a setting in `~/.ideamine/config.json`, and an empty value restores the default. An environment variable wins over the file.
 
@@ -235,6 +275,10 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 | `IDEAMINE_GROUP_THRESHOLD` | `group_threshold` | `0.65` | lowest mean similarity in a group, and of a related idea |
 | `IDEAMINE_PUBLISH_URL` | `publish_url` | *(off)* | dashboard server for `ideamine publish` |
 | `IDEAMINE_SERVE_PORT` | `serve_port` | `4332` | port of `ideamine serve` and `/ideas-web` |
+| `IDEAMINE_SERVE_HOSTS` | `serve_hosts` | *(none)* | more Host names that `ideamine serve` answers, for a server behind nginx |
+| `IDEAMINE_SYNC_URL` | `sync_url` | *(off)* | the ideamine server that holds the archive of every machine |
+| `IDEAMINE_PROMPT_LOG` | `prompt_log` | `off` | `on` sends each prompt to the ideamine server |
+| `IDEAMINE_MEMSTATE_URL` | `memstate_url` | *(off)* | the memstated daemon for the Memory tab |
 
 ## How it works
 
@@ -253,9 +297,12 @@ watcher on: any prompt ──► hook ──► background pass ──► claude
 publish on: any prompt after a change ──► hook ──► background publish ──► PUT index.html + data.json
 
 /ideas-web       ──► hook ──► ideamine serve on 127.0.0.1 ──► the buttons on the page ──► the same archive
+
+sync on: each change ──► outbox ──► ideamine server ──► the archive of every machine ──► copy here
+prompt log on: any prompt ──► hook ──► prompt outbox ──► background sync ──► the Prompts tab
 ```
 
-The plugin contains a Node MCP server with no dependencies, fourteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
+The plugin contains a Node MCP server with no dependencies, fifteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
 
 ## Development
 

@@ -32,6 +32,26 @@ export const SETTINGS = {
     value: '4332',
     about: 'port of `ideamine serve`, the dashboard with buttons on 127.0.0.1',
   },
+  serve_hosts: {
+    env: 'IDEAMINE_SERVE_HOSTS',
+    value: '',
+    about: 'more Host names that `ideamine serve` answers, comma-separated (for a server behind nginx)',
+  },
+  sync_url: {
+    env: 'IDEAMINE_SYNC_URL',
+    value: '',
+    about: 'ideamine server that holds the archive for every machine (empty: the archive is here)',
+  },
+  prompt_log: {
+    env: 'IDEAMINE_PROMPT_LOG',
+    value: 'off',
+    about: 'on: send each prompt to the ideamine server, for the Prompts tab of the dashboard',
+  },
+  memstate_url: {
+    env: 'IDEAMINE_MEMSTATE_URL',
+    value: '',
+    about: 'memstated daemon that the Memory tab of `ideamine serve` reads (empty: no Memory tab)',
+  },
 };
 
 const configPath = () => path.join(home(), 'config.json');

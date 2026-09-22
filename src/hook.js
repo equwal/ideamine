@@ -1,14 +1,17 @@
 // UserPromptSubmit hook: answers /idea, /ideas, and the local /ideas-* commands (ls, cat, rm, done,
-// reopen, find, groups, watch, web) and blocks the prompt, so the model is never called. That makes
-// capture free, instant, and possible even when the session is out of usage. Every other prompt
-// passes through untouched, including /ideas-go, /ideas-all, /ideas-sort, and questions, which their
-// skills answer. After each prompt, the hook lets the watcher and the dashboard catch up.
+// reopen, find, groups, watch, web, sync) and blocks the prompt, so the model is never called. That
+// makes capture free, instant, and possible even when the session is out of usage. Every other
+// prompt passes through untouched, including /ideas-go, /ideas-all, /ideas-sort, and questions,
+// which their skills answer. With the prompt log on, each prompt goes into the prompt outbox. After
+// each prompt, the hook lets the watcher, the dashboard, and the sync catch up.
 
+import * as archive from './archive.js';
 import * as embed from './embed.js';
 import * as publish from './publish.js';
-import { renderAdded, renderBoard, renderFound, renderGroups, renderIdea } from './render.js';
-import { addIdeas, FILTERS, findIdea, lane, listIdeas, load, removeIdeas, updateIdea } from './store.js';
-import { clip, splitIdeas } from './text.js';
+import { renderAdded, renderBoard, renderFound, renderGroups, renderIdea, stamp } from './render.js';
+import { FILTERS, findIdea, lane, listIdeas, load } from './store.js';
+import * as sync from './sync.js';
+import { clip, deriveTitle, splitIdeas } from './text.js';
 import * as watch from './watch.js';
 
 // `/idea ...`, `/ideas ...`, `/ideas-<verb> ...`, and the plugin-qualified `/ideamine:...` forms.
@@ -26,6 +29,7 @@ const USAGE = `Usage: /idea <text>                add an idea (a bulleted list a
        /ideas-find <words>          search by meaning (all lanes)
        /ideas-groups [lane|-a]      ideas grouped by meaning
        /ideas-web [off]             the dashboard with a button for each command, on this PC
+       /ideas-sync [url|off]        share the archive of every machine through an ideamine server
 These call the model:
        /ideas-go [N]                build the next idea, or #N, on its model. New ideas are triaged first.
        /ideas-all                   do every idea that fits this chat. The others stay in the queue.
@@ -33,6 +37,14 @@ These call the model:
        /ideas-watch [off]           Haiku triages new ideas and pairs them with projects, in the background`;
 
 const noIdea = (ids) => `No idea ${ids.map((id) => `#${String(id).replace(/^#/, '')}`).join(', ')}.`;
+
+// A read that the server could not answer shows the copy on this machine, and says so.
+function offline(text) {
+  const reason = archive.offlineReason();
+  if (!reason) return text;
+  const pulled = sync.readState().pulled;
+  return `(The ideamine server does not answer. This is the copy from ${pulled ? stamp(pulled) : 'no sync yet'}.)\n${text}`;
+}
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -57,8 +69,28 @@ export async function handlePrompt(prompt, { cwd = process.cwd(), session = null
 
   if (command === 'idea') {
     if (!arg) return USAGE;
-    const results = addIdeas(splitIdeas(arg), { source: 'hook', project: cwd, session });
-    return renderAdded(results, load());
+    const texts = splitIdeas(arg);
+    const results = await archive.add(texts, { source: 'hook', project: cwd, session });
+    if (results.queued) {
+      const what = texts.length === 1 ? clip(deriveTitle(texts[0]), 70) : `${texts.length} ideas`;
+      return `💡 Saved here: ${what}. The ideamine server does not answer, so it gets the idea later (${sync.waiting()} waiting).`;
+    }
+    return renderAdded(results, load()); // the copy here is current: the server answered
+  }
+
+  if (command === 'ideas-sync') {
+    if (/^off$/i.test(arg)) sync.setServer('');
+    else if (arg) {
+      let backup;
+      try {
+        backup = sync.setServer(arg);
+      } catch (e) {
+        return `ideamine sync: ${e.message}. Usage: /ideas-sync http://10.66.0.1/ · /ideas-sync off`;
+      }
+      await archive.fresh({ timeoutMs: 5000 });
+      if (backup) return `${sync.status()}\nThe archive that was here is in ${backup}.`;
+    }
+    return sync.status();
   }
 
   if (command === 'ideas-watch') {
@@ -78,13 +110,13 @@ export async function handlePrompt(prompt, { cwd = process.cwd(), session = null
 
   const words = arg.split(/\s+/).filter(Boolean);
   const ids = words.length > 0 && words.every((w) => ID.test(w)) ? words : null;
-  const db = load();
+  const db = await archive.fresh();
 
-  if (command === 'ideas' && !words.length) return renderBoard(db, { cwd, hints: true });
+  if (command === 'ideas' && !words.length) return offline(renderBoard(db, { cwd, hints: true }));
 
   if (command === 'ideas-find') {
     if (!arg) return USAGE;
-    return renderFound(await embed.find(db, arg, { timeoutMs: SEARCH_TIMEOUT_MS }), arg, { cwd });
+    return offline(renderFound(await embed.find(db, arg, { timeoutMs: SEARCH_TIMEOUT_MS }), arg, { cwd }));
   }
 
   if (command === 'ideas-groups') {
@@ -94,7 +126,7 @@ export async function handlePrompt(prompt, { cwd = process.cwd(), session = null
       const ideas = listIdeas(db, { filter });
       try {
         const groups = await embed.groupIdeas(ideas, { timeoutMs: SEARCH_TIMEOUT_MS });
-        return renderGroups(groups, ideas, { cwd, scope: filter });
+        return offline(renderGroups(groups, ideas, { cwd, scope: filter }));
       } catch (e) {
         if (!(e instanceof embed.EmbedError)) throw e;
         return `Groups need the embedding server, which does not answer: ${e.message}`;
@@ -107,22 +139,25 @@ export async function handlePrompt(prompt, { cwd = process.cwd(), session = null
     const filters = lower.filter((w) => FILTERS.includes(w));
     const here = lower.includes('here');
     if (filters.length + (here ? 1 : 0) === lower.length && filters.length <= 1) {
-      return renderBoard(db, { filter: filters[0] || 'open', project: here ? cwd : null, cwd, hints: true });
+      return offline(renderBoard(db, { filter: filters[0] || 'open', project: here ? cwd : null, cwd, hints: true }));
     }
   }
 
   if ((command === 'ideas-cat' || command === 'ideas-rm') && ids) {
     const missing = ids.filter((id) => !findIdea(db, id));
     if (missing.length) return noIdea(missing);
-    if (command === 'ideas-cat') return ids.map((id) => renderIdea(findIdea(db, id))).join('\n\n');
-    return removeIdeas(ids).map((i) => `✗ Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
+    if (command === 'ideas-cat') return offline(ids.map((id) => renderIdea(findIdea(db, id))).join('\n\n'));
+    const gone = await archive.remove(ids);
+    if (gone.queued) return archive.queuedText(gone);
+    return gone.map((i) => `✗ Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
   }
 
   const status = STATUS_COMMANDS[command];
   if (status && words[0] && ID.test(words[0])) {
     if (!findIdea(db, words[0])) return noIdea([words[0]]);
     const note = words.slice(1).join(' ');
-    const idea = updateIdea(words[0], { status, note: note || undefined });
+    const idea = await archive.update(words[0], { status, note: note || undefined });
+    if (idea.queued) return archive.queuedText(idea);
     return `✓ #${idea.id} ${clip(idea.title, 60)} → ${lane(idea)}${note ? ' (note added)' : ''}`;
   }
 
@@ -137,12 +172,18 @@ export async function runHook() {
   } catch {
     return; // not a hook payload; stay out of the way
   }
+  const prompt = typeof input?.prompt === 'string' ? input.prompt : '';
+  const cwd = input.cwd || process.cwd();
+  const session = input.session_id || null;
+  try {
+    if (sync.logsPrompts()) sync.logPrompt({ prompt, session, cwd });
+  } catch (e) {
+    // The prompt log must never stop a prompt.
+    process.stderr.write(`ideamine: the prompt log failed: ${e.message}\n`);
+  }
   let message = null;
   try {
-    message = await handlePrompt(typeof input?.prompt === 'string' ? input.prompt : '', {
-      cwd: input.cwd || process.cwd(),
-      session: input.session_id || null,
-    });
+    message = await handlePrompt(prompt, { cwd, session });
   } catch (e) {
     // Never swallow the user's text: let the prompt through so the /idea skill can save it via MCP.
     process.stderr.write(`ideamine: ${e.message}\n`);
@@ -156,12 +197,12 @@ export async function runHook() {
       hookSpecificOutput: { hookEventName: 'UserPromptSubmit', suppressOriginalPrompt: true },
     }));
   }
-  // Each prompt lets the watcher and the dashboard catch up, so they keep going while they are on.
-  for (const kick of [watch.kick, publish.kick]) {
+  // Each prompt lets the watcher, the dashboard, and the sync catch up, so they keep going.
+  for (const kick of [watch.kick, publish.kick, sync.kick]) {
     try {
       kick();
     } catch {
-      // The watcher and the dashboard must never stop a prompt.
+      // The watcher, the dashboard, and the sync must never stop a prompt.
     }
   }
 }

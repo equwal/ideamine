@@ -11,7 +11,9 @@ import fc from 'fast-check';
 import { handlePrompt } from '../src/hook.js';
 import * as serve from '../src/serve.js';
 import * as store from '../src/store.js';
+import { startFakeMemstate } from './fixtures/fake-memstate.js';
 import { startFakeServer } from './fixtures/fake-server.js';
+import { startServerProcess } from './fixtures/server-process.js';
 
 const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 
@@ -26,6 +28,7 @@ beforeEach(async () => {
   // The triage and the questions must never reach the real claude or the projects of this machine.
   process.env.IDEAMINE_CLAUDE_BIN = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));
   process.env.CLAUDE_CONFIG_DIR = process.env.IDEAMINE_HOME;
+  for (const name of ['IDEAMINE_SYNC_URL', 'IDEAMINE_MEMSTATE_URL', 'IDEAMINE_SERVE_HOSTS', 'IDEAMINE_PROMPT_LOG']) delete process.env[name];
   embedServer = await startFakeServer();
   process.env.IDEAMINE_EMBED_URL = `${embedServer.url}/v1`;
   opened = [];
@@ -91,6 +94,17 @@ test('only this page may use the server: a property over hosts, origins, and con
   assert.equal(serve.allowed(post({ host: '127.0.0.1:4332', origin: 'http://127.0.0.1:4332', type: 'application/json; charset=utf-8' }), port), true);
   assert.equal(serve.allowed(post({ host: '127.0.0.1:4332' }), port), true); // no Origin: a program on this PC
   for (const method of ['PUT', 'DELETE', 'OPTIONS', 'PATCH']) assert.equal(serve.allowed({ method, host: '127.0.0.1:4332' }, port), false);
+  // Behind nginx, the server also answers the names in serve_hosts, and a POST must come from there.
+  const hosts = ['10.66.0.1'];
+  assert.equal(serve.allowed({ method: 'GET', host: '10.66.0.1' }, port), false);
+  assert.equal(serve.allowed({ method: 'GET', host: '10.66.0.1' }, port, hosts), true);
+  assert.equal(serve.allowed(post({ host: '10.66.0.1', origin: 'http://10.66.0.1' }), port, hosts), true);
+  assert.equal(serve.allowed(post({ host: '10.66.0.1', origin: 'http://127.0.0.1:4332' }), port, hosts), false);
+  fc.assert(
+    fc.property(fc.string(), (host) => {
+      assert.equal(serve.allowed({ method: 'GET', host }, port, hosts), ['127.0.0.1:4332', 'localhost:4332', '10.66.0.1'].includes(host.toLowerCase()));
+    }),
+  );
 });
 
 test('requests from other pages change nothing', async () => {
@@ -116,7 +130,15 @@ test('the page comes with live data, and no other page can frame it', async () =
   const data = await (await fetch(new URL('data.json', url))).json();
   assert.equal(data.version, 1);
   assert.equal(data.ideas[0].key, 'IDEA-1');
-  assert.deepEqual(data.live, { note: '', window: process.platform === 'win32', watch: { on: false, status: data.live.watch.status } });
+  assert.deepEqual(data.live, {
+    note: '',
+    window: process.platform === 'win32',
+    claude: true, // the stand-in claude of the tests starts
+    watch: { on: false, status: data.live.watch.status },
+    sync: null,
+    prompts: false,
+    memory: false,
+  });
   assert.match(data.live.watch.status, /^ideamine watch: off/);
 });
 
@@ -200,6 +222,79 @@ test('search by meaning on the page goes through the server to the embedding ser
   assert.equal(res.status, 200);
   assert.equal((await res.json()).data[0].embedding.length, 64);
   assert.deepEqual(embedServer.inputs, ['search_query: subtitles']);
+});
+
+test('the server role keeps the prompts of every machine, each once, and gives them by days', async () => {
+  const recent = new Date(Date.now() - 3600000).toISOString();
+  const prompts = [
+    { id: 'a', at: recent, host: 'pc', session: 's1', cwd: 'C:\\work\\app', prompt: 'fix the tests' },
+    { id: 'b', at: '2026-01-01T00:00:00.000Z', host: 'mac', session: 's2', cwd: '/Users/me/app', prompt: 'an old one' },
+    { id: 'bad', prompt: 'no time' },
+  ];
+  const first = await api('prompts', { prompts });
+  assert.deepEqual([first.added, first.skipped], [2, 1]);
+  assert.equal((await api('prompts', { prompts })).added, 0); // the same prompts again
+  const get = async (route) => (await (await fetch(new URL(route, url))).json()).prompts;
+  assert.deepEqual((await get('api/prompts')).map((p) => p.id), ['b', 'a']); // oldest first
+  assert.deepEqual((await get('api/prompts?days=1')).map((p) => p.prompt), ['fix the tests']);
+  assert.equal((await (await fetch(new URL('data.json', url))).json()).live.prompts, true);
+});
+
+test('the Memory tab reads memstated, and never writes there', async () => {
+  const memstate = await startFakeMemstate();
+  process.env.IDEAMINE_MEMSTATE_URL = memstate.url;
+  const get = async (route) => (await fetch(new URL(route, url))).json();
+  try {
+    const overview = await get('api/memory/overview');
+    assert.deepEqual(overview.projects.map((p) => p.id), ['ideamine']);
+    assert.deepEqual(overview.memories.map((m) => [m.keypath, m.category, m.version]), [['task.summary.2026_09_21', 'status', 2], ['decisions.sync', 'decision', 1]]);
+    assert.equal(overview.memories[0].content, undefined); // the overview carries no texts
+    assert.equal((await get('api/memory/project?id=ideamine')).memories[0].content, 'Built the dashboard.');
+    const history = await get('api/memory/history?project=ideamine&keypath=task.summary.2026_09_21');
+    assert.deepEqual(history.versions.map((v) => v.content), ['Started the dashboard.', 'Built the dashboard.']);
+    assert.equal((await get('data.json')).live.memory, true);
+    const reads = /^(GET \/api\/v1\/projects|POST \/api\/v1\/keypaths|POST \/api\/v1\/memories\/history)$/;
+    assert.ok(memstate.requests.every((r) => reads.test(r)), memstate.requests.join(', '));
+    await memstate.close();
+    assert.match((await get('api/memory/overview')).error, /cannot reach memstated/);
+  } finally {
+    await memstate.close().catch(() => {});
+    delete process.env.IDEAMINE_MEMSTATE_URL;
+  }
+  assert.match((await get('api/memory/overview')).error, /this server shows no memories/);
+});
+
+test('behind nginx, the server answers the names in serve_hosts', async () => {
+  const ask = async (host) => (await raw('GET', '/api/ping', { host })).statusCode;
+  assert.equal(await ask('10.66.0.1'), 403);
+  process.env.IDEAMINE_SERVE_HOSTS = '10.66.0.1, ideas.lan';
+  try {
+    assert.deepEqual([await ask('10.66.0.1'), await ask('IDEAS.lan'), await ask('evil.example')], [200, 200, 403]);
+  } finally {
+    delete process.env.IDEAMINE_SERVE_HOSTS;
+  }
+});
+
+test('on a PC with sync on, the page reads the server, and its buttons change the archive there', async () => {
+  const memstate = await startFakeMemstate();
+  const remote = await startServerProcess({ IDEAMINE_MEMSTATE_URL: memstate.url });
+  process.env.IDEAMINE_SYNC_URL = remote.url;
+  try {
+    assert.match((await api('add', { text: 'from the page of the PC' })).message, /Saved #1 · from the page of the PC/);
+    const onServer = (await (await fetch(`${remote.url}api/db`)).json()).db;
+    assert.deepEqual(onServer.ideas.map((i) => i.text), ['from the page of the PC']);
+    const hello = { id: 'p1', at: new Date().toISOString(), prompt: 'hello' };
+    await fetch(`${remote.url}api/prompts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompts: [hello] }) });
+    assert.deepEqual((await (await fetch(new URL('api/prompts', url))).json()).prompts.map((p) => p.prompt), ['hello']);
+    assert.deepEqual((await (await fetch(new URL('api/memory/overview', url))).json()).projects.map((p) => p.id), ['ideamine']);
+    const { live } = await (await fetch(new URL('data.json', url))).json();
+    assert.deepEqual([live.sync.url, live.sync.offline, live.prompts, live.memory], [remote.url, null, true, true]);
+    assert.equal((await api('ops', { ops: [] })).status, 404); // a PC is no server for other machines
+  } finally {
+    delete process.env.IDEAMINE_SYNC_URL;
+    await remote.stop();
+    await memstate.close();
+  }
 });
 
 test('serve_port must be a port number', () => {
