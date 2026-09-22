@@ -32,7 +32,7 @@ const USAGE = `Usage: /idea <text>                add an idea (a bulleted list a
        /ideas-sync [url|off]        share the archive of every machine through an ideamine server
 These call the model:
        /ideas-go [N]                build the next idea, or #N, on its model. New ideas are triaged first.
-       /ideas-pipeline [N]          the same, through the agent pipeline (agent-pipeline plugin), for big ideas
+       /ideas-pipeline [N]          the same, through the agent pipeline that ships with ideamine, for big ideas
        /ideas-all                   do every idea that fits this chat. The others stay in the queue.
        /ideas-sort                  triage the inbox now and show the queue
        /ideas-watch [off]           Haiku triages new ideas and pairs them with projects, in the background`;

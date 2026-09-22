@@ -314,6 +314,7 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 /ideas-go        ──► Claude ──► MCP idea_next ──► claude -p (Sonnet, minimal context), for new ideas only
                                               ──► verdict · impact · size · cheapest capable model · brief
                             ──► subagent on that model ──► builds it ──► idea_update: done
+/ideas-pipeline  ──► Claude ──► MCP idea_next ──► the pipeline skill ──► seven agents, two gates ──► idea_update: a note after each phase
 /ideas-all       ──► Claude ──► MCP idea_list (full) ──► idea_remove for the ideas that fit this chat ──► builds them
 
 watcher on: any prompt ──► hook ──► background pass ──► claude -p (Haiku) ──► verdicts + a project for each idea
