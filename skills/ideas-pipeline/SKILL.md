@@ -1,6 +1,6 @@
 ---
 name: ideas-pipeline
-description: Build the next ideamine idea, or a given id, through the agent pipeline (research, storyboard, plan, engineers, test, validate) of the agent-pipeline plugin. For big ideas. New ideas are triaged first.
+description: Build the next ideamine idea, or a given id, through the agent pipeline that ships with ideamine (research, storyboard, plan, engineers, test, validate). For big ideas. New ideas are triaged first.
 argument-hint: "[id]"
 disable-model-invocation: true
 allowed-tools: mcp__plugin_ideamine_ideamine__idea_next, mcp__plugin_ideamine_ideamine__idea_update, mcp__plugin_ideamine_ideamine__idea_triage
@@ -8,7 +8,7 @@ allowed-tools: mcp__plugin_ideamine_ideamine__idea_next, mcp__plugin_ideamine_id
 
 Run one idea through the agent pipeline. Requested idea: $ARGUMENTS (empty means the next idea in the queue).
 
-The pipeline is the `pipeline` skill of the agent-pipeline plugin (`agent-pipeline:pipeline` in the skill list). If that skill is not available, say so in one line and stop, before you change any idea.
+The pipeline is the `pipeline` skill of this plugin (`ideamine:pipeline` in the skill list), with its seven agents in the `agents` folder of the plugin.
 
 The user saves ideas from any session. The triage pairs each idea with its project folder when one fits. Else the project of an idea is only the folder where the user saved it, and that folder can be wrong or gone. Judge by the text of the idea which idea fits this chat, and where it belongs.
 

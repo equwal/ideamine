@@ -47,7 +47,7 @@ Marketplaces you add yourself do not auto-update. To upgrade, run `claude plugin
 | `/ideas-web` · `off` | Start the dashboard with a button for each command on this PC, and show its address. See [Buttons](#buttons). | **No** |
 | `/ideas-sync <url>` · `off` | Share one archive between all your machines through an ideamine server. See [One archive for every machine](#one-archive-for-every-machine). | **No** |
 | `/ideas-go [12]` | Build the idea that fits this chat, else the first in the queue, or #12, on its recommended model. New ideas are triaged first. | Yes, this is the build |
-| `/ideas-pipeline [12]` | The same, through the agent pipeline of the [agent-pipeline](#with-the-agent-pipeline) plugin: research, storyboard, plan, engineers in parallel, test, validate. For big ideas. | Yes, this is the build |
+| `/ideas-pipeline [12]` | The same, through the [agent pipeline](#with-the-agent-pipeline) that ships with ideamine: research, storyboard, plan, engineers in parallel, test, validate. For big ideas. | Yes, this is the build |
 | `/ideas-all` | Claude reads every idea, takes the ones that fit this chat out of the queue, and does them. The others stay in the queue. | Yes, this is the build |
 | `/ideas-sort` | Triage the inbox now and show the queue. You do not have to: `/ideas-go` triages when it must. | Yes, briefly |
 | `/ideas-watch [off]` | Turn on the watcher: Haiku triages each new idea and pairs it with its project, in the background. With no argument, it also shows what the watcher did. | Haiku, only for new ideas |
@@ -211,7 +211,9 @@ The dashboard can also show what your Claudes did:
   #12 sync subtitles with the audiobook → /work/app, through the agent pipeline
 ```
 
-`/ideas-go` gives an idea to one subagent. For a big idea, `/ideas-pipeline` gives it to the [agent-pipeline](https://github.com/map588/agents) plugin instead: a researcher maps the project, a story-writer turns the idea into stories, a project manager plans tasks, engineers build them in parallel worktrees, an integrator merges, and a tester and a validator check the result. The pipeline asks you to approve the stories and the plan. `/ideas-go` points to `/ideas-pipeline` when an idea is size L or XL.
+`/ideas-go` gives an idea to one subagent. For a big idea, `/ideas-pipeline` gives it to the agent pipeline instead: a researcher maps the project, a story-writer turns the idea into stories, a project manager plans tasks, engineers build them in parallel worktrees, an integrator merges, and a tester and a validator check the result. The pipeline asks you to approve the stories and the plan. `/ideas-go` points to `/ideas-pipeline` when an idea is size L or XL.
+
+The pipeline ships with ideamine: the seven agents are in `agents/`, and `/pipeline <request>` runs it for any request, not only for an idea. They are a copy of [map588/agents](https://github.com/map588/agents), which describes each role.
 
 The idea is the record of the run. The request tells the pipeline to add a note to the idea after each phase (`pipeline: research done`, `pipeline: plan approved`, `pipeline: wave 1 integrated`, ...), to mark the idea done when its tests and validation pass, and to leave it in `doing` with a note when it stops at its iteration cap. The dashboard shows the latest note on the ticket in the Doing column, and the drawer shows them all. In a terminal, `ideamine go 12 --pipeline` opens Claude Code with the same request.
 
@@ -325,7 +327,7 @@ sync on: each change ──► outbox ──► ideamine server ──► the ar
 prompt log on: any prompt ──► hook ──► prompt outbox ──► background sync ──► the Prompts tab
 ```
 
-The plugin contains a Node MCP server with no dependencies, sixteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
+The plugin contains a Node MCP server with no dependencies, seventeen skills (the slash commands), seven agents (the pipeline), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
 
 ## Development
 

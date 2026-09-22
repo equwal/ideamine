@@ -160,6 +160,7 @@ const PROMPTS = [
   { name: 'ideas-watch', description: 'Turn the background watcher on or off', arguments: [{ name: 'off', required: false }] },
   { name: 'ideas-web', description: 'Start or stop the dashboard with buttons on this PC', arguments: [{ name: 'off', required: false }] },
   { name: 'ideas-sync', description: 'Share one archive between your machines through an ideamine server', arguments: [{ name: 'url', required: false }] },
+  { name: 'pipeline', description: 'Run the agent pipeline for a feature request: research, storyboard, plan, engineers, test, validate', arguments: [{ name: 'request', required: true }] },
 ];
 
 function skillBody(name, args) {
