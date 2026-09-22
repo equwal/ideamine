@@ -347,6 +347,21 @@ const ACTIONS = {
     return `✓ ${bits.join(' · ')}`;
   },
 
+  /**
+   * A drag on the board into the Do, Maybe, or Skip lane. Only the verdict changes. The rest of the
+   * triage (impact, size, model, why, brief) stays as it is.
+   */
+  async verdict({ id, verdict }) {
+    const db = await archive.fresh();
+    const idea = store.findIdea(db, id);
+    if (!idea) throw new Error(`no idea #${id}`);
+    const out = await archive.triage([{ ...(idea.triage || {}), id: idea.id, verdict }], { by: 'web' });
+    if (out.queued) return archive.queuedText(out);
+    const failed = Array.isArray(out) && out[0] && out[0].error;
+    if (failed) throw new Error(failed);
+    return `✓ #${idea.id} ${clip(idea.title, 60)} → ${verdict}`;
+  },
+
   /** /ideas-sort */
   async sort() {
     const { headlessTriage } = await import('./claude.js');

@@ -106,6 +106,9 @@ main { padding: 12px; }
 .column-count { color: var(--text-muted); font-weight: 400; }
 .column-body { display: flex; flex-direction: column; gap: 8px; padding: 8px; min-height: 12px; }
 .column-empty { color: var(--text-muted); font-size: 12px; padding: 4px; }
+.column.drop-over { border-color: var(--accent); background: var(--surface-2); }
+.card.dragging { opacity: .45; }
+.card[draggable="true"] { cursor: grab; }
 
 /* ticket cards */
 .card { display: block; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
@@ -415,6 +418,7 @@ const state = {
   searchResult: null,
   busy: false,
   tableSort: { key: 'rank', dir: 1 },
+  drag: null, // the card that the user drags on the board: { id, lane }
   prompts: { days: 1, list: null, error: null, filter: '' },
   memory: { overview: null, error: null, project: null, memories: new Map(), histories: new Map() },
 };
@@ -592,11 +596,67 @@ function ideaCard(idea, opts) {
   if (idea.project) meta.push(el('span', { class: 'card-project' }, idea.project));
   for (const t of idea.tags || []) meta.push(el('span', { class: 'chip chip-tag' }, t));
 
-  return el('button', { class: 'card' + (opts.compact ? ' card-compact' : ''), type: 'button', onclick: () => openTicket(idea.key) },
+  const card = el('button', { class: 'card' + (opts.compact ? ' card-compact' : ''), type: 'button', onclick: () => openTicket(idea.key) },
     top,
     el('div', { class: 'card-title' }, idea.title),
     lastNote ? el('div', { class: 'card-note', title: lastNote.text }, lastNote.text) : null,
     meta.length ? el('div', { class: 'card-meta' }, meta) : null);
+  if (isLive()) makeDraggable(card, idea);
+  return card;
+}
+
+/* ---- drag and drop on the board ---- */
+
+/** The card tells the board which idea moves. A drop then runs the command for the new lane. */
+function makeDraggable(card, idea) {
+  card.draggable = true;
+  card.addEventListener('dragstart', (e) => {
+    state.drag = { id: idea.id, lane: idea.lane };
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', idea.key);
+  });
+  card.addEventListener('dragend', () => {
+    card.classList.remove('dragging');
+    state.drag = null;
+  });
+}
+
+/**
+ * The command for a card that the user drops in `lane`, or null when the drop changes nothing.
+ * A drop in Doing starts the build where Claude Code is. A page without Claude Code only moves the
+ * idea, and the machine with the login builds it.
+ */
+function dropCommand(idea, lane) {
+  if (!idea || idea.lane === lane) return null;
+  const live = state.data.live || {};
+  if (lane === 'doing' && live.claude && live.window) {
+    return { action: 'go', body: { id: idea.id }, busy: 'Opening Claude Code for ' + idea.key + '…' };
+  }
+  if (['doing', 'done', 'dropped', 'inbox'].includes(lane)) return { action: 'update', body: { id: idea.id, status: lane } };
+  if (['do', 'maybe', 'skip'].includes(lane)) return { action: 'verdict', body: { id: idea.id, verdict: lane } };
+  return null;
+}
+
+/** A lane column takes a card. */
+function makeDropTarget(column, lane) {
+  column.addEventListener('dragover', (e) => {
+    if (!state.drag || state.drag.lane === lane) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    column.classList.add('drop-over');
+  });
+  column.addEventListener('dragleave', (e) => {
+    if (!column.contains(e.relatedTarget)) column.classList.remove('drop-over');
+  });
+  column.addEventListener('drop', (e) => {
+    e.preventDefault();
+    column.classList.remove('drop-over');
+    const drag = state.drag;
+    state.drag = null;
+    const command = drag && dropCommand(state.byId.get(drag.id), lane);
+    if (command) runAction(command.action, command.body, command.busy);
+  });
 }
 
 /* ---- header: counts + relative update time ---- */
@@ -633,12 +693,14 @@ function renderTabsActive() {
 
 function renderColumn(lane) {
   const ideas = state.data.ideas.filter((i) => i.lane === lane).sort((a, b) => a.rank - b.rank);
-  return el('div', { class: 'column' },
+  const column = el('div', { class: 'column' },
     el('div', { class: 'column-header' },
       el('span', { class: 'column-dot', style: '--chip-color:var(--lane-' + lane + ')' }),
       el('span', { class: 'column-title' }, LANE_LABELS[lane]),
       el('span', { class: 'column-count' }, String(ideas.length))),
     el('div', { class: 'column-body' }, ideas.length ? ideas.map((i) => ideaCard(i)) : el('p', { class: 'column-empty' }, 'No tickets')));
+  if (isLive()) makeDropTarget(column, lane);
+  return column;
 }
 
 function renderBoard() {

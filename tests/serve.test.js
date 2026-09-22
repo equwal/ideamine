@@ -356,3 +356,20 @@ test('a window that failed waits for a key only when a person can press one', ()
   assert.equal(r.status, 1);
   assert.match(r.stderr, /no idea #9/);
 });
+
+test('a drag to the Do, Maybe, or Skip lane changes only the verdict', async () => {
+  await api('add', { text: '- alpha' });
+  store.applyTriage([{ id: 1, verdict: 'do', impact: 5, size: 'l', model: 'opus', why: 'because', brief: 'plan' }]);
+
+  assert.equal((await api('verdict', { id: 1, verdict: 'maybe' })).message, '✓ #1 alpha → maybe');
+  const idea = store.findIdea(store.load(), 1);
+  assert.equal(store.lane(idea), 'maybe');
+  // The triage of Claude stays. Only the lane of the card moves.
+  assert.deepEqual(
+    [idea.triage.impact, idea.triage.size, idea.triage.model, idea.triage.why, idea.triage.brief, idea.triage.by],
+    [5, 'l', 'opus', 'because', 'plan', 'web'],
+  );
+
+  assert.equal((await api('verdict', { id: 1, verdict: 'nope' })).error, 'verdict must be one of do/maybe/skip');
+  assert.equal((await api('verdict', { id: 9, verdict: 'do' })).error, 'no idea #9');
+});

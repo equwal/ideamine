@@ -165,6 +165,19 @@ server {
 
 The board, the timeline, the groups, and the search show `/ideas`, `/ideas-ls`, `/ideas-cat`, `/ideas-groups`, and `/ideas-find`. `/ideas-all` has no button, because it needs the chat that it works in.
 
+### Drag a card
+
+On the board, drag a card into another lane. The lane says what happens:
+
+| Lane | What the drag does |
+|---|---|
+| **Doing** | Where Claude Code runs, a new window opens Claude Code on the idea, like **Build with Claude**. On a page without Claude Code, the card only moves to Doing. |
+| **Do**, **Maybe**, **Skip** | Only the verdict of the triage changes. The impact, the size, the model, and the text of the triage stay. |
+| **Inbox** | The idea waits for a new triage. |
+| **Done**, **Dropped** | The same as the **Done** and **Drop** buttons, but without a note. |
+
+A drag needs a mouse or a trackpad. On a touch screen, use the buttons on the ticket.
+
 Triage, Build, Ask, and the watcher need the Claude Code login, so they show only where Claude Code runs. The commands run on your PC, because your Claude Code login is there. Thus the server listens on `127.0.0.1` only, and it takes commands only from its own page: each command must be JSON from the same origin, and the Host header must name the server. Another web page in your browser cannot send commands to it, and no other page can show it in a frame. After a change, the server uploads the dashboard again when `publish_url` is set, so the copy on your dashboard server stays current. That copy has no buttons: it shows "Read-only copy". `/ideas-web off` stops the server. In a terminal, `ideamine serve` runs it in the foreground. To use another port, run `ideamine config serve_port 5000`. The log is `~/.ideamine/serve.log`.
 
 ## One archive for every machine
