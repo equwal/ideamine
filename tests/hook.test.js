@@ -53,6 +53,9 @@ test('ordinary prompts, model commands, and questions pass straight through', ()
     'an /idea in the middle',
     '/ideas-go',
     '/ideamine:ideas-go 3',
+    '/ideas-pipeline',
+    '/ideamine:ideas-pipeline 3',
+    '/ideas-pipeline dark mode for the popup',
     '/ideas-all',
     '/ideas-sort',
     '/ideas-cat',
@@ -78,7 +81,7 @@ test('/ideas and the dashed commands list, show, and edit ideas', () => {
   assert.equal(runHook('/ideas-cat 9').reason, 'No idea #9.');
   assert.equal(runHook('/ideas-cat 1 8 9').reason, 'No idea #8, #9.');
   assert.equal(runHook('/ideas-done 9').reason, 'No idea #9.');
-  assert.match(runHook('/idea').reason, /^Usage[\s\S]*\/ideas-rm N/);
+  assert.match(runHook('/idea').reason, /^Usage[\s\S]*\/ideas-rm N[\s\S]*\/ideas-pipeline/);
 });
 
 test('/ideas-rm deletes ideas for good, without a model call', () => {
