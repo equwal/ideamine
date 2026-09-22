@@ -44,6 +44,7 @@ Marketplaces you add yourself do not auto-update. To upgrade, run `claude plugin
 | `/ideas-reopen 12` | Put an idea back in the queue, for example one that the triage skipped | **No** |
 | `/ideas-find sync subtitles` | Search every lane by meaning, not only by the words. See [Search by meaning](#search-by-meaning-and-groups). | **No** |
 | `/ideas-groups` · `done` · `-a` | Show the ideas grouped by meaning | **No** |
+| `/ideas-web` · `off` | Start the dashboard with a button for each command on this PC, and show its address. See [Buttons](#buttons). | **No** |
 | `/ideas-go [12]` | Build the idea that fits this chat, else the first in the queue, or #12, on its recommended model. New ideas are triaged first. | Yes, this is the build |
 | `/ideas-all` | Claude reads every idea, takes the ones that fit this chat out of the queue, and does them. The others stay in the queue. | Yes, this is the build |
 | `/ideas-sort` | Triage the inbox now and show the queue. You do not have to: `/ideas-go` triages when it must. | Yes, briefly |
@@ -129,7 +130,30 @@ server {
 }
 ```
 
-`data.json` has `version` (1), `generated`, `embed` (model, query prefix, thresholds, and whether vectors are present), `counts`, `ideas`, and `groups`. Each idea has its ticket key (`IDEA-12`), lane, rank in the queue, triage, times (`created`, `triaged`, `started`, `closed`), timeline `phases`, notes, `group`, `related` ideas with their similarity, and `vec`, the vector as base64 of little-endian float32.
+`data.json` has `version` (1), `generated`, `embed` (model, query prefix, thresholds, and whether vectors are present), `counts`, `ideas`, and `groups`. Each idea has its ticket key (`IDEA-12`), lane, rank in the queue, triage, times (`created`, `triaged`, `started`, `closed`), timeline `phases`, notes, `group`, `related` ideas with their similarity, and `vec`, the vector as base64 of little-endian float32. The `data.json` of `ideamine serve` also has `live` (see below).
+
+### Buttons
+
+```
+> /ideas-web
+  ideamine web: http://127.0.0.1:4332/ (started)
+```
+
+`/ideas-web` starts `ideamine serve` in the background and shows its address. That page is the same dashboard, with a button for each command:
+
+| Button | Command |
+|---|---|
+| **+ Idea** | `/idea`. A bulleted list adds one idea for each bullet. |
+| **Triage inbox** | `/ideas-sort` |
+| **Build next**, and **Build with Claude** on a ticket | `/ideas-go`, `/ideas-go N`. New ideas are triaged first. Then a new terminal window opens Claude Code on the recommended model, in the project of the idea. Windows only. |
+| **Ask** | `/ideas <question>`. Claude answers from the whole archive, and each `#12` in the answer opens that ticket. |
+| **Watcher** | `/ideas-watch`, `/ideas-watch off` |
+| **Start**, **Done**, **Drop**, **Reopen**, **Delete** on a ticket | `ideamine start`, `/ideas-done`, `ideamine drop`, `/ideas-reopen`, `/ideas-rm` |
+| **Add note**, **Build model** on a ticket | `ideamine note`, `ideamine model` |
+
+The board, the timeline, the groups, and the search show `/ideas`, `/ideas-ls`, `/ideas-cat`, `/ideas-groups`, and `/ideas-find`. `/ideas-all` has no button, because it needs the chat that it works in.
+
+The commands run on your PC, because the archive and your Claude Code login are there. Thus the server listens on `127.0.0.1` only, and it takes commands only from its own page: each command must be JSON from the same origin, and the Host header must name the server. Another web page in your browser cannot send commands to it, and no other page can show it in a frame. After a change, the server uploads the dashboard again when `publish_url` is set, so the copy on your dashboard server stays current. That copy has no buttons: it shows "Read-only copy". `/ideas-web off` stops the server. In a terminal, `ideamine serve` runs it in the foreground. To use another port, run `ideamine config serve_port 5000`. The log is `~/.ideamine/serve.log`.
 
 ## Model routing
 
@@ -174,6 +198,7 @@ ideamine find sync subtitles                      # search by meaning
 ideamine groups [-a]                              # ideas grouped by meaning
 ideamine embed                                    # embed new ideas, show the similarity numbers
 ideamine publish [url|off] [--dir folder]         # the dashboard (see above)
+ideamine serve [--port 4332]                      # the dashboard with buttons, on 127.0.0.1
 ideamine config [key [value]]                     # show or change a setting
 ideamine export IDEAS.md                          # Markdown copy of everything
 ```
@@ -209,6 +234,7 @@ Tools: `idea_add`, `idea_list`, `idea_triage`, `idea_update`, `idea_next`, `idea
 | `IDEAMINE_SEARCH_THRESHOLD` | `search_threshold` | `0.5` | lowest similarity of a search result |
 | `IDEAMINE_GROUP_THRESHOLD` | `group_threshold` | `0.65` | lowest mean similarity in a group, and of a related idea |
 | `IDEAMINE_PUBLISH_URL` | `publish_url` | *(off)* | dashboard server for `ideamine publish` |
+| `IDEAMINE_SERVE_PORT` | `serve_port` | `4332` | port of `ideamine serve` and `/ideas-web` |
 
 ## How it works
 
@@ -225,9 +251,11 @@ watcher on: any prompt ──► hook ──► background pass ──► claude
 
 /ideas-find, /ideas-groups ──► hook ──► embedding server (new ideas only) ──► cosine similarity ──► answer
 publish on: any prompt after a change ──► hook ──► background publish ──► PUT index.html + data.json
+
+/ideas-web       ──► hook ──► ideamine serve on 127.0.0.1 ──► the buttons on the page ──► the same archive
 ```
 
-The plugin contains a Node MCP server with no dependencies, thirteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
+The plugin contains a Node MCP server with no dependencies, fourteen skills (the slash commands), and one hook. The hook answers `/idea`, `/ideas`, and the local `/ideas-*` commands before any API call, and it lets every other prompt through. The hook runs directly, not through a shell, and takes about 130 ms per prompt on Windows. The skills are user-only, so their descriptions add no tokens to your sessions. If the archive cannot be read, the hook lets the prompt through, so the `/idea` skill can still save it with the MCP tool. Your text is never dropped.
 
 ## Development
 

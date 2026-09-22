@@ -109,7 +109,7 @@ test('tool errors come back as isError results, not protocol errors', async () =
 test('prompts mirror the skills', async () => {
   const list = await request('prompts/list');
   const names = list.result.prompts.map((p) => p.name);
-  assert.deepEqual(names, ['idea', 'ideas', 'ideas-ls', 'ideas-cat', 'ideas-rm', 'ideas-find', 'ideas-groups', 'ideas-done', 'ideas-reopen', 'ideas-go', 'ideas-all', 'ideas-sort', 'ideas-watch']);
+  assert.deepEqual(names, ['idea', 'ideas', 'ideas-ls', 'ideas-cat', 'ideas-rm', 'ideas-find', 'ideas-groups', 'ideas-done', 'ideas-reopen', 'ideas-go', 'ideas-all', 'ideas-sort', 'ideas-watch', 'ideas-web']);
   // One prompt for each skill, so that other MCP clients get the same commands as the plugin.
   assert.deepEqual([...names].sort(), fs.readdirSync(new URL('../skills', import.meta.url)).sort());
   const go = await request('prompts/get', { name: 'ideas-go', arguments: { id: '12' } });

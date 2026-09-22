@@ -1,5 +1,5 @@
 // UserPromptSubmit hook: answers /idea, /ideas, and the local /ideas-* commands (ls, cat, rm, done,
-// reopen, find, groups, watch) and blocks the prompt, so the model is never called. That makes
+// reopen, find, groups, watch, web) and blocks the prompt, so the model is never called. That makes
 // capture free, instant, and possible even when the session is out of usage. Every other prompt
 // passes through untouched, including /ideas-go, /ideas-all, /ideas-sort, and questions, which their
 // skills answer. After each prompt, the hook lets the watcher and the dashboard catch up.
@@ -25,6 +25,7 @@ const USAGE = `Usage: /idea <text>                add an idea (a bulleted list a
        /ideas-done N [note] · /ideas-reopen N
        /ideas-find <words>          search by meaning (all lanes)
        /ideas-groups [lane|-a]      ideas grouped by meaning
+       /ideas-web [off]             the dashboard with a button for each command, on this PC
 These call the model:
        /ideas-go [N]                build the next idea, or #N, on its model. New ideas are triaged first.
        /ideas-all                   do every idea that fits this chat. The others stay in the queue.
@@ -65,6 +66,14 @@ export async function handlePrompt(prompt, { cwd = process.cwd(), session = null
     else if (/^off$/i.test(arg)) watch.turnOff();
     else return null;
     return watch.status(); // runHook starts the first pass after this
+  }
+
+  if (command === 'ideas-web') {
+    // Loaded here, not at the top: the hook runs for each prompt.
+    const serve = await import('./serve.js');
+    if (!arg) return serve.ensureRunning();
+    if (/^off$/i.test(arg)) return serve.stopRunning();
+    return null;
   }
 
   const words = arg.split(/\s+/).filter(Boolean);

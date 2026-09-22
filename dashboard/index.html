@@ -61,6 +61,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* a class with a display value must not show a hidden element */
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
@@ -198,8 +199,32 @@ main { padding: 12px; }
 .tooltip-title { color: var(--text-dim); margin: 2px 0; }
 .tooltip-phase { color: var(--text-muted); }
 
+/* commands: only on the page of `ideamine serve` */
+.header-actions { padding-top: 0; padding-bottom: 10px; }
+.readonly-note { color: var(--text-muted); font-size: 12px; padding-top: 0; padding-bottom: 8px; }
+.btn { display: inline-flex; align-items: center; padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); color: var(--text); font-size: 13px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--text-muted); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-danger { background: transparent; border-color: var(--lane-dropped); color: var(--lane-dropped); }
+body.busy .btn, body.busy #watch-toggle, body.busy .model-select { pointer-events: none; opacity: .5; }
+.panel { display: flex; flex-direction: column; gap: 8px; margin: 12px 12px 0; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.panel[hidden] { display: none; }
+.panel-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.panel-hint { color: var(--text-muted); font-size: 12px; }
+textarea, select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+textarea { width: 100%; resize: vertical; }
+.answer { white-space: pre-wrap; font-size: 13px; }
+.answer:empty { display: none; }
+.drawer-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.model-label { font-size: 12px; color: var(--text-dim); }
+.toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 40; width: max-content; max-width: min(560px, calc(100% - 32px)); padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border-strong); border-left: 4px solid var(--lane-done); border-radius: 6px; box-shadow: var(--shadow); font-size: 13px; white-space: pre-wrap; cursor: pointer; }
+.toast[hidden] { display: none; }
+.toast-busy { border-left-color: var(--accent); }
+.toast-error { border-left-color: var(--lane-dropped); }
+
 /* focus */
-button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
@@ -223,7 +248,33 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
     </label>
     <input type="search" id="search-input" class="search-input" placeholder="Search ideas…" aria-label="Search ideas">
   </div>
+  <div class="header-row header-actions" id="actions" hidden>
+    <button type="button" class="btn btn-primary" id="new-idea" title="Save an idea (/idea)">+ Idea</button>
+    <button type="button" class="btn" id="triage" title="Triage the inbox with one headless Claude call (/ideas-sort)">Triage inbox</button>
+    <button type="button" class="btn" id="build-next" title="Triage new ideas, then open Claude Code on the first idea of the queue (/ideas-go)">Build next</button>
+    <button type="button" class="btn" id="ask-open" title="Ask Claude about your ideas (/ideas &lt;question&gt;)">Ask</button>
+    <label class="parked-toggle" id="watch-label"><input type="checkbox" id="watch-toggle"> Watcher</label>
+  </div>
+  <p class="header-row readonly-note" id="readonly-note" hidden>Read-only copy. For buttons, run /ideas-web in Claude Code on your PC.</p>
 </header>
+
+<section class="panel" id="composer" hidden aria-label="New idea">
+  <textarea id="composer-text" rows="3" placeholder="One idea, or a bulleted list: one idea for each bullet. #tags work." aria-label="Idea text"></textarea>
+  <div class="panel-row">
+    <button type="button" class="btn btn-primary" id="composer-save">Save</button>
+    <button type="button" class="btn" id="composer-cancel">Cancel</button>
+    <span class="panel-hint">Ctrl+Enter saves.</span>
+  </div>
+</section>
+
+<section class="panel" id="ask-panel" hidden aria-label="Ask about your ideas">
+  <div class="panel-row">
+    <input type="text" id="ask-input" class="search-input" placeholder="For example: which ideas fit in an hour?" aria-label="Question">
+    <button type="button" class="btn btn-primary" id="ask-send">Ask</button>
+    <button type="button" class="btn" id="ask-close">Close</button>
+  </div>
+  <div class="answer" id="ask-answer" aria-live="polite"></div>
+</section>
 
 <main id="main" role="tabpanel"></main>
 
@@ -234,12 +285,14 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 </aside>
 
 <div class="tooltip" id="tooltip" hidden role="status"></div>
+<div class="toast" id="toast" hidden role="status" aria-live="polite" title="Click to close"></div>
 
 <script>
 'use strict';
 
 /* ideamine dashboard. One file, no build step, no external calls
-   besides data.json and v1/embeddings on the same origin. */
+   besides data.json and v1/embeddings on the same origin. On the page of
+   `ideamine serve`, data.json has `live`, and the buttons call api/ there. */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MIN = 60000, HOUR = 3600000, DAY = 86400000;
@@ -252,6 +305,8 @@ const LANE_LABELS = { doing: 'Doing', do: 'Do', maybe: 'Maybe', inbox: 'Inbox', 
 const PHASE_LABELS = { inbox: 'Inbox', queued: 'Queued', doing: 'Doing' };
 const SEARCH_DEBOUNCE_MS = 300;
 const EMBED_TIMEOUT_MS = 4000;
+const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
+const OPEN_LANES = ['doing', 'do', 'maybe', 'inbox'];
 
 const state = {
   data: null,
@@ -262,11 +317,13 @@ const state = {
   openKey: null,
   query: '',
   searchResult: null,
+  busy: false,
 };
 
 let searchTimer = null;
 let searchToken = 0;
 let lastFocused = null;
+let toastTimer = null;
 const vecCache = new Map();
 
 const $main = document.getElementById('main');
@@ -280,6 +337,24 @@ const $drawerBackdrop = document.getElementById('drawer-backdrop');
 const $drawerClose = document.getElementById('drawer-close');
 const $drawerBody = document.getElementById('drawer-body');
 const $tooltip = document.getElementById('tooltip');
+const $actions = document.getElementById('actions');
+const $readonlyNote = document.getElementById('readonly-note');
+const $newIdea = document.getElementById('new-idea');
+const $triage = document.getElementById('triage');
+const $buildNext = document.getElementById('build-next');
+const $askOpen = document.getElementById('ask-open');
+const $watchLabel = document.getElementById('watch-label');
+const $watchToggle = document.getElementById('watch-toggle');
+const $composer = document.getElementById('composer');
+const $composerText = document.getElementById('composer-text');
+const $composerSave = document.getElementById('composer-save');
+const $composerCancel = document.getElementById('composer-cancel');
+const $askPanel = document.getElementById('ask-panel');
+const $askInput = document.getElementById('ask-input');
+const $askSend = document.getElementById('ask-send');
+const $askClose = document.getElementById('ask-close');
+const $askAnswer = document.getElementById('ask-answer');
+const $toast = document.getElementById('toast');
 
 /* ---- small DOM builders. Text children become text nodes, never HTML. ---- */
 
@@ -767,6 +842,7 @@ function buildDrawerContent(idea) {
   if (idea.project) metaLines.push('Project: ' + idea.project);
   if (idea.tags && idea.tags.length) metaLines.push('Tags: ' + idea.tags.join(', '));
   if (metaLines.length) frag.append(el('p', { class: 'drawer-meta' }, metaLines.join(' · ')));
+  if (isLive()) frag.append(renderDrawerActions(idea));
 
   frag.append(renderDateGrid(idea));
 
@@ -807,6 +883,161 @@ function renderDrawer() {
 function openTicket(key) { location.hash = key; }
 function closeDrawer() { location.hash = state.view; }
 
+/* ---- commands: the slash commands as buttons, on the page of `ideamine serve` ---- */
+
+function isLive() { return !!(state.data && state.data.live); }
+
+function showToast(text, kind) {
+  clearTimeout(toastTimer);
+  $toast.textContent = text;
+  $toast.className = 'toast toast-' + kind;
+  $toast.hidden = false;
+  if (kind !== 'busy') toastTimer = setTimeout(() => { $toast.hidden = true; }, kind === 'error' ? 15000 : 8000);
+}
+
+async function callApi(action, body) {
+  const res = await fetch('api/' + action, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  let json = null;
+  try { json = await res.json(); } catch (err) { json = null; }
+  if (!res.ok || !json || !json.ok) throw new Error((json && json.error) || 'HTTP ' + res.status);
+  return json.message;
+}
+
+function setBusy(on) {
+  state.busy = on;
+  document.body.classList.toggle('busy', on);
+  $main.setAttribute('aria-busy', String(on));
+}
+
+/** Run one command, show its answer, and load the new data. Resolves to true when the command worked. */
+async function runAction(action, body, busyText) {
+  if (state.busy) return false;
+  setBusy(true);
+  showToast(busyText || 'Working…', 'busy');
+  let worked = false;
+  try {
+    const message = await callApi(action, body);
+    worked = true;
+    showToast(message, 'ok');
+    await loadData();
+  } catch (err) {
+    showToast(worked ? 'Done, but the page could not load the new data: ' + err.message : err.message, 'error');
+  }
+  setBusy(false);
+  if (state.openKey && !findByKey(state.openKey)) {
+    // The idea of the open ticket is gone: close the ticket without a new history entry.
+    history.replaceState(null, '', '#' + state.view);
+    state.openKey = null;
+  }
+  render();
+  if (!$drawer.hidden && !$drawer.contains(document.activeElement)) $drawerClose.focus();
+  if (worked && state.query.trim()) runSearch(state.query);
+  return worked;
+}
+
+function renderToolbar() {
+  const live = isLive();
+  $actions.hidden = !live;
+  $readonlyNote.hidden = live;
+  if (!live) return;
+  const inbox = (state.data.counts && state.data.counts.inbox) || 0;
+  $triage.textContent = 'Triage inbox (' + inbox + ')';
+  $triage.disabled = inbox === 0;
+  $buildNext.hidden = !state.data.live.window;
+  const watch = state.data.live.watch || {};
+  $watchToggle.checked = !!watch.on;
+  $watchLabel.title = watch.status || '';
+}
+
+function actionButton(label, kind, onClick, title) {
+  return el('button', { type: 'button', class: 'btn' + (kind ? ' btn-' + kind : ''), title: title || null, onclick: onClick }, label);
+}
+
+function renderDrawerActions(idea) {
+  const id = idea.id;
+  const open = OPEN_LANES.includes(idea.lane);
+  const closed = idea.lane === 'done' || idea.lane === 'dropped';
+  const note = el('textarea', { rows: '2', placeholder: 'Note. Done and Drop save it too.', 'aria-label': 'Note' });
+  const noteText = () => note.value.trim() || undefined;
+  const update = (patch) => runAction('update', Object.assign({ id }, patch));
+
+  const buttons = [];
+  if (!closed && state.data.live.window) {
+    buttons.push(actionButton('Build with Claude', 'primary', () => runAction('go', { id }, 'Opening Claude Code for ' + idea.key + '…'),
+      'Open Claude Code on the recommended model, in the project of the idea (/ideas-go ' + id + ')'));
+  }
+  if (!closed && idea.lane !== 'doing') buttons.push(actionButton('Start', '', () => update({ status: 'doing' })));
+  if (open) buttons.push(actionButton('Done', '', () => update({ status: 'done', note: noteText() }), '/ideas-done ' + id));
+  if (open || idea.lane === 'skip') buttons.push(actionButton('Drop', '', () => update({ status: 'dropped', note: noteText() })));
+  if (!open || idea.lane === 'doing') buttons.push(actionButton('Reopen', '', () => update({ status: 'reopen' }), 'Put the idea back in the queue (/ideas-reopen ' + id + ')'));
+  buttons.push(actionButton('Delete', 'danger', () => {
+    if (confirm('Delete ' + idea.key + ' for good?')) runAction('rm', { ids: [id] });
+  }, '/ideas-rm ' + id));
+
+  const model = el('select', { class: 'model-select', 'aria-label': 'Model for the build' },
+    idea.model ? null : el('option', { value: '' }, 'none'),
+    MODELS.map((m) => el('option', { value: m, selected: idea.model === m }, m)));
+  model.addEventListener('change', () => { if (model.value) update({ model: model.value }); });
+  const addNote = actionButton('Add note', '', () => {
+    const text = noteText();
+    if (text) update({ note: text });
+    else note.focus();
+  });
+
+  return el('section', { class: 'drawer-section' },
+    el('h3', {}, 'Actions'),
+    el('div', { class: 'drawer-actions' }, buttons),
+    note,
+    el('div', { class: 'drawer-actions' }, addNote, el('label', { class: 'model-label' }, 'Build model ', model)));
+}
+
+async function saveIdea() {
+  const text = $composerText.value.trim();
+  if (!text) { $composerText.focus(); return; }
+  if (await runAction('add', { text }, 'Saving…')) {
+    $composerText.value = '';
+    $composer.hidden = true;
+  }
+}
+
+/** The text of an answer, with each #12 that names an idea as a link to its ticket. */
+function linkIdeas(text) {
+  const parts = [];
+  let last = 0;
+  for (const m of text.matchAll(/#(\d+)/g)) {
+    const idea = state.byId.get(Number(m[1]));
+    if (!idea) continue;
+    parts.push(text.slice(last, m.index), el('button', { type: 'button', class: 'link-button', onclick: () => openTicket(idea.key) }, m[0]));
+    last = m.index + m[0].length;
+  }
+  parts.push(text.slice(last));
+  return parts;
+}
+
+async function askQuestion() {
+  const question = $askInput.value.trim();
+  if (!question || state.busy) return;
+  setBusy(true);
+  $askAnswer.textContent = 'Claude reads your ideas…';
+  try {
+    const answer = await callApi('ask', { question });
+    $askAnswer.textContent = '';
+    $askAnswer.append(...linkIdeas(answer));
+  } catch (err) {
+    $askAnswer.textContent = 'No answer: ' + err.message;
+  }
+  setBusy(false);
+}
+
+function togglePanel(panel, focusTarget) {
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) focusTarget.focus();
+}
+
 /* ---- load error ---- */
 
 class HttpError extends Error {
@@ -826,6 +1057,7 @@ function renderLoadError(err) {
 function render() {
   renderHeader();
   renderTabsActive();
+  renderToolbar();
   if (state.query.trim() !== '') renderSearch();
   else if (state.view === 'timeline') renderTimeline();
   else if (state.view === 'groups') renderGroups();
@@ -872,19 +1104,46 @@ function bindStaticEvents() {
   $drawerBackdrop.addEventListener('click', closeDrawer);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$drawer.hidden) closeDrawer(); });
   document.addEventListener('click', () => { $tooltip.hidden = true; });
+
+  $newIdea.addEventListener('click', () => togglePanel($composer, $composerText));
+  $composerSave.addEventListener('click', saveIdea);
+  $composerCancel.addEventListener('click', () => { $composer.hidden = true; });
+  $composerText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveIdea(); }
+  });
+  $triage.addEventListener('click', () => runAction('sort', {}, 'Claude triages the inbox…'));
+  $buildNext.addEventListener('click', () => runAction('go', {}, 'Claude triages the new ideas, then Claude Code opens on the next one…'));
+  $askOpen.addEventListener('click', () => togglePanel($askPanel, $askInput));
+  $askSend.addEventListener('click', askQuestion);
+  $askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') askQuestion(); });
+  $askClose.addEventListener('click', () => { $askPanel.hidden = true; });
+  $watchToggle.addEventListener('change', () => runAction('watch', { on: $watchToggle.checked }));
+  $toast.addEventListener('click', () => { $toast.hidden = true; });
+  // The watcher and other sessions change the archive too. Show their changes when the page comes back.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !isLive() || state.busy) return;
+    loadData().then(render, () => {});
+  });
+}
+
+async function loadData() {
+  const res = await fetch('data.json', { cache: 'no-store' });
+  if (!res.ok) throw new HttpError(res.status);
+  const data = await res.json();
+  state.data = data;
+  state.byId.clear();
+  state.byKey.clear();
+  vecCache.clear();
+  for (const idea of data.ideas) {
+    state.byId.set(idea.id, idea);
+    state.byKey.set(idea.key.toUpperCase(), idea);
+  }
 }
 
 async function main() {
   bindStaticEvents();
   try {
-    const res = await fetch('data.json', { cache: 'no-store' });
-    if (!res.ok) throw new HttpError(res.status);
-    const data = await res.json();
-    state.data = data;
-    for (const idea of data.ideas) {
-      state.byId.set(idea.id, idea);
-      state.byKey.set(idea.key.toUpperCase(), idea);
-    }
+    await loadData();
     window.addEventListener('hashchange', onHashChange);
     applyHash();
     render();

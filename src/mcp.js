@@ -169,6 +169,7 @@ const PROMPTS = [
   { name: 'ideas-all', description: 'Do every idea that fits this chat', arguments: [] },
   { name: 'ideas-sort', description: 'Triage the inbox now and show the queue', arguments: [] },
   { name: 'ideas-watch', description: 'Turn the background watcher on or off', arguments: [{ name: 'off', required: false }] },
+  { name: 'ideas-web', description: 'Start or stop the dashboard with buttons on this PC', arguments: [{ name: 'off', required: false }] },
 ];
 
 function skillBody(name, args) {
@@ -191,7 +192,7 @@ function summarizeTriage(results, how = '') {
   return lines.join('\n');
 }
 
-function headlessSummary(out) {
+export function headlessSummary(out) {
   return out.message || summarizeTriage(out.results, `${out.model}, ${out.tokens.input} in / ${out.tokens.output} out tokens`);
 }
 

@@ -1,7 +1,8 @@
 // Stand-in for the Claude Code CLI: returns a verdict for every idea in the prompt and records how
 // it was called, so tests can check flags and environment without spending tokens. It pairs an
 // idea with a listed project when the idea names that project. It answers with the folder path,
-// or with the project name when FAKE_CLAUDE_ANSWER=name (as Haiku did).
+// or with the project name when FAKE_CLAUDE_ANSWER=name (as Haiku did). To a question about the
+// ideas, it answers with the first idea of the prompt.
 import fs from 'node:fs';
 
 let input = '';
@@ -35,12 +36,15 @@ const verdicts = ideas.map(([, id, text], i) => ({
   project: answer(projects.find((p) => text.toLowerCase().includes(p.name.toLowerCase()))),
 }));
 
+const question = input.split('\nQuestion: ')[1];
+const first = input.match(/\*\*#(\d+) /);
+
 process.stdout.write(JSON.stringify({
   type: 'result',
   subtype: 'success',
   is_error: false,
-  result: '',
-  structured_output: { verdicts },
+  result: question ? `#${first ? first[1] : '?'} fits "${question.trim()}".` : '',
+  structured_output: question ? undefined : { verdicts },
   total_cost_usd: 0.0012,
   usage: { input_tokens: 321, output_tokens: 45 },
 }));

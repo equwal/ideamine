@@ -27,6 +27,11 @@ export const SETTINGS = {
     value: '',
     about: 'dashboard server that gets index.html and data.json by HTTP PUT (empty: off)',
   },
+  serve_port: {
+    env: 'IDEAMINE_SERVE_PORT',
+    value: '4332',
+    about: 'port of `ideamine serve`, the dashboard with buttons on 127.0.0.1',
+  },
 };
 
 const configPath = () => path.join(home(), 'config.json');

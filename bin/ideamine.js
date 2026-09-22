@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // ideamine CLI. Also the entry point the plugin uses for its MCP server (`mcp`) and hook (`hook`).
 
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 const HELP = `ideamine: an idea inbox for Claude Code
@@ -24,6 +25,7 @@ const HELP = `ideamine: an idea inbox for Claude Code
   ideamine publish [url|off] [--dir <folder>]
                                   upload the dashboard (index.html, data.json) now; a url also turns
                                   on the upload after each change; --dir writes the files to a folder
+  ideamine serve [--port 4332]    the dashboard with a button for each command, at 127.0.0.1
   ideamine config [key [value]]   show or change a setting (an empty value restores the default)
   ideamine export [file.md]       Markdown export of the whole archive
   ideamine path                   where the archive lives (override with IDEAMINE_HOME)
@@ -38,7 +40,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [key, inline] = a.slice(2).split('=', 2);
       if (inline !== undefined) flags[key] = inline;
-      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && ['model', 'limit', 'budget', 'query', 'dir'].includes(key)) flags[key] = argv[++i];
+      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && ['model', 'limit', 'budget', 'query', 'dir', 'port'].includes(key)) flags[key] = argv[++i];
       else flags[key] = true;
     } else words.push(a);
   }
@@ -53,6 +55,11 @@ async function readStdin() {
 
 function fail(message) {
   process.stderr.write(`ideamine: ${message}\n`);
+  // A window that the dashboard opened closes when the command ends. Wait for a key, so that the
+  // user can read the error.
+  if (process.env.IDEAMINE_WINDOW && process.stdin.isTTY) {
+    spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'pause'], { stdio: 'inherit' });
+  }
   process.exit(1);
 }
 
@@ -128,13 +135,11 @@ async function main() {
       break;
     }
     case 'go': {
-      const { buildPrompt, launchSession } = await import('../src/claude.js');
+      const { goPlan, launchSession } = await import('../src/claude.js');
       const db = store.load();
       const idea = words[0] ? store.findIdea(db, words[0]) : store.pickNext(db, { project: cwd });
       if (!idea) fail(words[0] ? `no idea #${words[0]}` : 'nothing is ready to build; run: ideamine sort');
-      const model = idea.triage?.model || 'sonnet';
-      const dir = idea.project && fs.existsSync(idea.project) ? idea.project : cwd;
-      const prompt = buildPrompt(idea);
+      const { model, dir, prompt } = goPlan(idea, cwd);
       if (flags.print) {
         console.log(`directory: ${dir}\nmodel:     ${model}\n\n${prompt}`);
         break;
@@ -213,6 +218,16 @@ async function main() {
       const out = await publish.publish({ dir: typeof flags.dir === 'string' ? flags.dir : null });
       console.log(`Published ${out.ideas} ideas and ${out.groups} groups to ${out.where}`);
       if (out.note) console.log(out.note);
+      break;
+    }
+    case 'serve': {
+      const serve = await import('../src/serve.js');
+      const { server, url } = await serve.start({
+        ...(flags.port ? { port: Number(flags.port) } : {}),
+        log: (text) => console.log(serve.logLine(text)),
+      });
+      server.on('close', () => process.exit(0)); // /ideas-web off
+      console.log(serve.logLine(`the dashboard with buttons runs at ${url} (Ctrl+C stops it)`));
       break;
     }
     case 'config': {

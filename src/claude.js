@@ -1,7 +1,10 @@
-// Running the Claude Code CLI from ideamine: headless triage, and launching a session to build an idea.
+// Running the Claude Code CLI from ideamine: headless triage and questions, and launching a session
+// to build an idea.
 
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { knownProjects } from './projects.js';
+import { renderMarkdown } from './render.js';
 import { BATCH_SCHEMA, pendingIdeas, triagePrompt } from './rubric.js';
 import { applyTriage, counts, findIdea, load, normalizeModel } from './store.js';
 
@@ -18,13 +21,15 @@ function command(args) {
 
 /**
  * Environment for a separate, independent Claude Code process: drop the variables that tie a
- * child to the session that started us (nesting guard, host messaging, the parent's effort).
+ * child to the session that started us (nesting guard, host messaging, the parent's effort), and
+ * IDEAMINE_WINDOW, so that an ideamine command in that session never waits for a key.
  */
 function childEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (
       key === 'CLAUDECODE' ||
+      key === 'IDEAMINE_WINDOW' ||
       key === 'CLAUDE_PID' ||
       key === 'CLAUDE_EFFORT' ||
       key === 'AI_AGENT' ||
@@ -70,6 +75,50 @@ function run(args, input, timeoutMs, env = {}) {
 }
 
 /**
+ * Arguments for a one-shot `claude -p` call: no tools, no MCP servers, no settings, JSON output.
+ * Skipping settings drops hooks, plugins, and skill listings: ~4k fewer input tokens per call.
+ * Set IDEAMINE_SETTING_SOURCES=user if your login depends on settings.json (apiKeyHelper, env).
+ */
+function headlessArgs({ model, budget, system, extra = [] }) {
+  const args = [
+    '-p',
+    '--model', model,
+    '--output-format', 'json',
+    ...extra,
+    '--tools', '',
+    '--strict-mcp-config',
+    '--setting-sources', process.env.IDEAMINE_SETTING_SOURCES ?? '',
+    '--no-session-persistence',
+    '--max-budget-usd', String(budget),
+    '--system-prompt', system,
+  ];
+  // Haiku takes no effort setting.
+  if (model !== 'haiku') args.push('--effort', 'low');
+  return args;
+}
+
+/** Run a headless call. Returns the JSON result of the CLI, or throws with the reason. */
+async function runHeadless(args, prompt, { timeoutMs, env = {} }) {
+  const res = await run(args, prompt, timeoutMs, env);
+  let out;
+  try {
+    out = JSON.parse(res.stdout);
+  } catch {
+    const detail = (res.stderr || res.stdout || '').trim().split(/\r?\n/).slice(-5).join('\n');
+    throw new Error(`claude exited with code ${res.code}: ${detail || 'no output'}`);
+  }
+  if (out.is_error) throw new Error(`claude: ${out.result || out.subtype || 'error'}`);
+  return out;
+}
+
+/** Input tokens (with the cache) and output tokens of a headless call. */
+function tokensOf(out) {
+  const u = out.usage || {};
+  const input = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+  return { input, output: u.output_tokens || 0 };
+}
+
+/**
  * Triage the inbox with a one-shot `claude -p` call: no tools, no MCP servers, no settings, a
  * two-line system prompt, and JSON-schema output. Runs on the user's normal Claude Code login and
  * costs about 400 tokens per idea, whatever model the calling session uses. `ids` triages those
@@ -83,23 +132,14 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
 
   const projects = knownProjects(db);
   const prompt = `${triagePrompt(db, pending, projects)}\n\nReturn one verdict for every idea listed above.`;
-  // Skipping settings drops hooks, plugins, and skill listings: ~4k fewer input tokens per call.
-  // Set IDEAMINE_SETTING_SOURCES=user if your login depends on settings.json (apiKeyHelper, env).
-  const args = [
-    '-p',
-    '--model', alias,
-    '--output-format', 'json',
-    '--json-schema', JSON.stringify(BATCH_SCHEMA),
-    '--tools', '',
-    '--strict-mcp-config',
-    '--setting-sources', process.env.IDEAMINE_SETTING_SOURCES ?? '',
-    '--no-session-persistence',
-    '--max-budget-usd', String(budget),
-    '--system-prompt', 'You triage a developer\'s backlog of ideas. Follow the rubric exactly and answer only with the requested JSON.',
-  ];
-  if (alias !== 'haiku') args.push('--effort', 'low');
-  // Haiku takes no effort setting. Its thinking was about 70% of its output tokens and did not change
-  // the verdicts, so it gets no thinking.
+  const args = headlessArgs({
+    model: alias,
+    budget,
+    system: 'You triage a developer\'s backlog of ideas. Follow the rubric exactly and answer only with the requested JSON.',
+    extra: ['--json-schema', JSON.stringify(BATCH_SCHEMA)],
+  });
+  // Haiku's thinking was about 70% of its output tokens and did not change the verdicts, so it gets
+  // no thinking.
   const env = alias === 'haiku' ? { MAX_THINKING_TOKENS: '0' } : {};
   if (dryRun) {
     const shown = args.map((a) => (/[\s"{]/.test(a) || !a ? JSON.stringify(a) : a)).join(' ');
@@ -107,21 +147,26 @@ export async function headlessTriage({ model = process.env.IDEAMINE_TRIAGE_MODEL
     return { message: `${vars}${claudeBin()} ${shown}\n\n${prompt}` };
   }
 
-  const res = await run(args, prompt, 5 * 60 * 1000, env);
-  let out;
-  try {
-    out = JSON.parse(res.stdout);
-  } catch {
-    const detail = (res.stderr || res.stdout || '').trim().split(/\r?\n/).slice(-5).join('\n');
-    throw new Error(`claude exited with code ${res.code}: ${detail || 'no output'}`);
-  }
-  if (out.is_error) throw new Error(`claude: ${out.result || out.subtype || 'error'}`);
+  const out = await runHeadless(args, prompt, { timeoutMs: 5 * 60 * 1000, env });
   const data = out.structured_output ?? parseLooseJson(out.result);
   if (!Array.isArray(data?.verdicts)) throw new Error('claude answered without verdicts');
   const results = applyTriage(data.verdicts, { by: `${alias} (headless)`, projects });
-  const u = out.usage || {};
-  const input = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-  return { results, model: alias, cost: out.total_cost_usd, tokens: { input, output: u.output_tokens || 0 } };
+  return { results, model: alias, cost: out.total_cost_usd, tokens: tokensOf(out) };
+}
+
+/**
+ * Answer a question about the archive, like `/ideas <question>`, with one headless call. The
+ * prompt is the Markdown export: every idea with its lane, verdict, model, and brief.
+ */
+export async function askAboutIdeas(question, { model = 'sonnet', budget = 0.5 } = {}) {
+  const alias = normalizeModel(model) || model;
+  const args = headlessArgs({
+    model: alias,
+    budget,
+    system: 'You answer questions about a developer\'s backlog of ideas. Answer in a few short lines of plain text. Name each idea by its number, like #12.',
+  });
+  const out = await runHeadless(args, `${renderMarkdown(load())}\nQuestion: ${question}`, { timeoutMs: 2 * 60 * 1000 });
+  return { answer: String(out.result || '').trim(), model: alias, cost: out.total_cost_usd, tokens: tokensOf(out) };
 }
 
 /**
@@ -148,6 +193,18 @@ export function buildPrompt(idea) {
       `or run: ideamine done ${idea.id} "<one-line outcome>"`,
   );
   return lines.join('\n');
+}
+
+/**
+ * How `ideamine go` builds an idea: on its recommended model, in its project folder when that
+ * folder still exists, else in `fallback`.
+ */
+export function goPlan(idea, fallback) {
+  return {
+    model: idea.triage?.model || 'sonnet',
+    dir: idea.project && fs.existsSync(idea.project) ? idea.project : fallback,
+    prompt: buildPrompt(idea),
+  };
 }
 
 /** Start an interactive Claude Code session on the recommended model. */
