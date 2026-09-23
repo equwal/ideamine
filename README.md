@@ -210,12 +210,26 @@ server {
 
 `serve_hosts` names the Host that nginx sends. Without it, the server refuses the request, so a DNS rebinding page cannot reach the archive. The server does not ask who you are: the network decides who can reach it. Put it only on a private network like WireGuard.
 
+### HTTPS for a name that is only on the tunnel
+
+`mem.equwal.com` points to a WireGuard address, so Let's Encrypt cannot reach it over HTTP. The certificate therefore comes from a DNS challenge that the server answers itself. `deploy/acme-zone.sh` installs `nsd` with one small zone, `acme.equwal.com`, and a certbot hook that writes the token into that zone. `nsd` answers only this zone, so it is no open resolver. `deploy/tls.sh` gets the certificate and adds the HTTPS server block to nginx.
+
+The owner of the domain adds three records one time:
+
+| Type | Host | Value |
+|---|---|---|
+| A | `ns1` | the public address of the server |
+| NS | `acme` | `ns1.equwal.com` |
+| CNAME | `_acme-challenge.mem` | `mem.acme.equwal.com.` |
+
+The nameserver name has three labels, because Namecheap refuses a nameserver value with two labels. certbot keeps the hooks in the renewal file, so each renewal writes a new token without help. Plain HTTP stays on, because the address of the tunnel and older bookmarks use it.
+
 ### On your phone
 
 The dashboard is also an app for a phone. Open it and put it on the home screen: it gets the ideamine icon and opens without the address bar.
 
-- **iPhone or iPad**: open the page in Safari, then "Share" and "Add to Home Screen". This works over plain HTTP, so it needs nothing else.
-- **Android**: Chrome offers "Install app" when the page comes over HTTPS. The installed app also takes a share: send a text from another app to ideamine, and the page opens with that text in the composer.
+- **iPhone or iPad**: open `https://mem.equwal.com` in Safari, then "Share" and "Add to Home Screen". Plain HTTP also works.
+- **Android**: Chrome offers "Install app" on `https://mem.equwal.com`. The installed app also takes a share: send a text from another app to ideamine, and the page opens with that text in the composer.
 - `?text=...` and `?new=1` open the composer too, so a shortcut or another app can save an idea in one step.
 - The service worker keeps the page and its icons, so the app opens when the tunnel to the server is down. The ideas, the prompts, and the memories always come from the server: an old copy of them would say the wrong thing.
 

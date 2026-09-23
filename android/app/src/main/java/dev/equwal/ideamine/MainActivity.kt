@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        const val DEFAULT_SERVER = "http://mem.equwal.com/"
+        const val DEFAULT_SERVER = "https://mem.equwal.com/"
         const val NEW_IDEA = "dev.equwal.ideamine.NEW_IDEA"
 
         /** An address with a scheme and a slash at the end, so that a shared text can go after it. */
