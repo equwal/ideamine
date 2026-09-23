@@ -85,7 +85,16 @@ test('publish uploads data.json and index.html with PUT, and kick() starts again
   assert.equal(kick(), true); // never published
   const out = await publish.publish();
   assert.deepEqual([out.where, out.ideas], [`${server.url}/dash`, 1]);
-  assert.deepEqual([...server.files.keys()], ['/dash/data.json', '/dash/index.html']);
+  assert.deepEqual([...server.files.keys()].sort(), [
+    '/dash/apple-touch-icon.png',
+    '/dash/data.json',
+    '/dash/icon-192.png',
+    '/dash/icon-512.png',
+    '/dash/icon-maskable-512.png',
+    '/dash/index.html',
+    '/dash/manifest.webmanifest',
+    '/dash/sw.js',
+  ]);
   assert.equal(JSON.parse(server.files.get('/dash/data.json')).ideas[0].title, 'one idea');
   assert.match(server.files.get('/dash/index.html'), /<html/i);
   assert.equal(kick(), false); // nothing changed
@@ -121,12 +130,22 @@ test('a background publish that cannot start is recorded, and the caller goes on
   assert.equal(publish.kick({ start: () => assert.fail('must wait after the error') }), false);
 });
 
-test('publish --dir writes both files to a folder', async () => {
+test('publish --dir writes the page, the data, and what a phone needs', async () => {
   store.addIdeas(['one idea']);
   const dir = path.join(store.home(), 'out');
   const out = await publish.publish({ dir });
   assert.equal(out.where, dir);
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['data.json', 'index.html']);
+  assert.deepEqual(fs.readdirSync(dir).sort(), [
+    'apple-touch-icon.png',
+    'data.json',
+    'icon-192.png',
+    'icon-512.png',
+    'icon-maskable-512.png',
+    'index.html',
+    'manifest.webmanifest',
+    'sw.js',
+  ]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.webmanifest'), 'utf8')).name, 'ideamine');
 });
 
 test('config: the environment wins over the file, and an empty value restores the default', () => {

@@ -97,6 +97,26 @@ function send(res, status, json, headers = {}) {
   res.end(JSON.stringify(json));
 }
 
+// The files that make the page an app on a phone: the manifest, the icons, and the service worker.
+// They sit next to the page, and `ideamine publish` uploads them with it.
+export const ASSETS = {
+  'manifest.webmanifest': 'application/manifest+json; charset=utf-8',
+  'sw.js': 'text/javascript; charset=utf-8',
+  'icon-192.png': 'image/png',
+  'icon-512.png': 'image/png',
+  'icon-maskable-512.png': 'image/png',
+  'apple-touch-icon.png': 'image/png',
+};
+
+export const assetPath = (name) => fileURLToPath(new URL(`../dashboard/${name}`, import.meta.url));
+
+function sendAsset(res, name) {
+  // A service worker must come from the folder that it controls, so it is never cached long.
+  const cache = name === 'sw.js' ? 'no-store' : 'public, max-age=86400';
+  res.writeHead(200, { ...HEADERS, 'cache-control': cache, 'content-type': ASSETS[name] });
+  res.end(fs.readFileSync(assetPath(name)));
+}
+
 function sendPage(res) {
   res.writeHead(200, {
     ...HEADERS,
@@ -499,6 +519,7 @@ async function handle(req, res, ctx) {
   const { pathname, search, searchParams } = new URL(req.url, 'http://127.0.0.1');
   const route = `${req.method === 'HEAD' ? 'GET' : req.method} ${pathname}`;
   if (route === 'GET /' || route === 'GET /index.html') return sendPage(res);
+  if (req.method === 'GET' && Object.hasOwn(ASSETS, pathname.slice(1))) return sendAsset(res, pathname.slice(1));
   if (route === 'GET /data.json') return send(res, 200, await liveData());
   // A ping gets a new connection each time, so it never reaches a server that stops on an old one.
   if (route === 'GET /api/ping') return send(res, 200, { ok: true, app: 'ideamine' }, { connection: 'close' });

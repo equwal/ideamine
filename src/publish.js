@@ -231,9 +231,12 @@ export async function publish({ url = config.get('publish_url'), dir = null } = 
   if (!url && !dir) throw new Error('no dashboard server is set. Run `ideamine publish <url>` once, or pass --dir <folder>');
   const mtime = archiveTime();
   const { data, note } = await build(load());
+  const { ASSETS, assetPath } = await import('./serve.js');
   const files = [
     ['data.json', JSON.stringify(data), 'application/json'],
     ['index.html', fs.readFileSync(PAGE), 'text/html; charset=utf-8'],
+    // The manifest, the icons, and the service worker: the page is an app on a phone with them.
+    ...Object.entries(ASSETS).map(([name, type]) => [name, fs.readFileSync(assetPath(name)), type]),
   ];
   if (dir) {
     fs.mkdirSync(dir, { recursive: true });

@@ -225,6 +225,29 @@ test('search by meaning on the page goes through the server to the embedding ser
   assert.deepEqual(embedServer.inputs, ['search_query: subtitles']);
 });
 
+test('the page comes with what a phone needs: a manifest, icons, and a service worker', async () => {
+  const get = (route) => fetch(new URL(route, url));
+  const manifest = await get('manifest.webmanifest');
+  assert.equal(manifest.headers.get('content-type'), 'application/manifest+json; charset=utf-8');
+  const app = await manifest.json();
+  assert.equal(app.display, 'standalone');
+  assert.deepEqual(app.icons.map((i) => i.sizes), ['192x192', '512x512', '512x512']);
+  assert.equal(app.share_target.params.text, 'text'); // a phone can share a text into the composer
+  const worker = await get('sw.js');
+  assert.match(worker.headers.get('content-type'), /javascript/);
+  assert.equal(worker.headers.get('cache-control'), 'no-store');
+  assert.match(await worker.text(), /addEventListener\('fetch'/);
+  for (const [name, type] of [['icon-192.png', 'image/png'], ['icon-512.png', 'image/png'], ['apple-touch-icon.png', 'image/png']]) {
+    const res = await get(name);
+    assert.equal(res.headers.get('content-type'), type);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    assert.deepEqual([...bytes.subarray(1, 4)], [0x50, 0x4e, 0x47], `${name} is a PNG`);
+  }
+  const page = await (await get('index.html')).text();
+  assert.match(page, /<link rel="manifest" href="manifest\.webmanifest">/);
+  assert.match(page, /apple-mobile-web-app-capable/);
+});
+
 test('the server role keeps the prompts of every machine, each once, and gives them by days', async () => {
   const recent = new Date(Date.now() - 3600000).toISOString();
   const prompts = [

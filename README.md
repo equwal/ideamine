@@ -210,6 +210,17 @@ server {
 
 `serve_hosts` names the Host that nginx sends. Without it, the server refuses the request, so a DNS rebinding page cannot reach the archive. The server does not ask who you are: the network decides who can reach it. Put it only on a private network like WireGuard.
 
+### On your phone
+
+The dashboard is also an app for a phone. Open it and put it on the home screen: it gets the ideamine icon and opens without the address bar.
+
+- **iPhone or iPad**: open the page in Safari, then "Share" and "Add to Home Screen". This works over plain HTTP, so it needs nothing else.
+- **Android**: Chrome offers "Install app" when the page comes over HTTPS. The installed app also takes a share: send a text from another app to ideamine, and the page opens with that text in the composer.
+- `?text=...` and `?new=1` open the composer too, so a shortcut or another app can save an idea in one step.
+- The service worker keeps the page and its icons, so the app opens when the tunnel to the server is down. The ideas, the prompts, and the memories always come from the server: an old copy of them would say the wrong thing.
+
+The icons are in the repository. `node dashboard/icons.mjs` draws them again.
+
 ### Prompts, Memory, and Usage
 
 The dashboard can also show what your Claudes did:
