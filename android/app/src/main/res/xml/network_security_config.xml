@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The dashboard lives on a private network, where a certificate of a public authority is not
+     possible. Plain HTTP is allowed for those names only; everything else needs HTTPS. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">mem.equwal.com</domain>
+        <domain includeSubdomains="false">10.66.0.1</domain>
+    </domain-config>
+</network-security-config>

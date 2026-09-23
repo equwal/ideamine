@@ -2,3 +2,10 @@ node_modules/
 *.tmp
 *.log
 .DS_Store
+
+# the Android app
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties

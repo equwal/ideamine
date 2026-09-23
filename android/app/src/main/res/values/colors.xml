@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The colours of the dark board, so that the app does not flash white while the page loads. -->
+    <color name="background">#0B0B0B</color>
+    <color name="text">#FFFFFF</color>
+</resources>

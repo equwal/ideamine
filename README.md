@@ -221,6 +221,8 @@ The dashboard is also an app for a phone. Open it and put it on the home screen:
 
 The icons are in the repository. `node dashboard/icons.mjs` draws them again.
 
+`android/` holds an Android app: the same page in a window of its own, with a share button. Send a text from any app to ideamine, and the composer opens with it. See [android/README.md](android/README.md). It is not in a store, because the dashboard answers only on your private network, where a reviewer cannot reach it.
+
 ### Prompts, Memory, and Usage
 
 The dashboard can also show what your Claudes did:

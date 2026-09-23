@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ideamine</string>
+    <string name="no_server">The ideamine server at %1$s does not answer. Turn on the WireGuard tunnel of this device, then try again.</string>
+    <string name="retry">Try again</string>
+    <string name="server_title">Address of the server</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="new_idea">New idea</string>
+</resources>

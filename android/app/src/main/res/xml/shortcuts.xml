@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="new-idea"
+        android:shortcutShortLabel="@string/new_idea">
+        <intent
+            android:action="dev.equwal.ideamine.NEW_IDEA"
+            android:targetClass="dev.equwal.ideamine.MainActivity"
+            android:targetPackage="dev.equwal.ideamine" />
+    </shortcut>
+</shortcuts>
