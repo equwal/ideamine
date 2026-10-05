@@ -55,15 +55,16 @@ const extraHosts = () => config.get('serve_hosts').split(',').map((h) => h.trim(
 
 /**
  * True when the server may answer a request. The Host header must name this server, which stops a
- * DNS rebinding page. A POST must send JSON, and its Origin, if any, must be this server. A page of
- * another site cannot send JSON here without a CORS preflight, and this server allows none.
+ * DNS rebinding page. A POST must send JSON, and its Origin, if any, must be this server, over HTTP
+ * or over the HTTPS of nginx in front of it. A page of another site cannot send JSON here without a
+ * CORS preflight, and this server allows none.
  */
 export function allowed({ method, host, origin, type }, port, hosts = []) {
   const h = String(host ?? '').toLowerCase();
   if (h !== `127.0.0.1:${port}` && h !== `localhost:${port}` && !hosts.includes(h)) return false;
   if (method === 'GET' || method === 'HEAD') return true;
   if (method !== 'POST' || !/^application\/json\s*(;|$)/i.test(String(type ?? '').trim())) return false;
-  return origin == null || origin === `http://${h}`;
+  return origin == null || origin === `http://${h}` || origin === `https://${h}`;
 }
 
 /**
@@ -422,8 +423,9 @@ const ACTIONS = {
   },
 
   /**
-   * A drag on the board into the Do, Maybe, or Skip lane. Only the verdict changes. The rest of the
-   * triage (impact, size, model, why, brief) stays as it is.
+   * A drag on the board into the Do, Maybe, or Skip lane. The verdict changes, and an idea from
+   * Doing, Done, or Dropped goes back in the queue. The rest of the triage (impact, size, model,
+   * why, brief) stays as it is.
    */
   async verdict({ id, verdict }) {
     const db = await archive.fresh();
@@ -433,6 +435,11 @@ const ACTIONS = {
     if (out.queued) return archive.queuedText(out);
     const failed = Array.isArray(out) && out[0] && out[0].error;
     if (failed) throw new Error(failed);
+    // A verdict alone moves only an idea in the inbox. "reopen" puts a started or closed one in its lane.
+    if (!['inbox', 'triaged'].includes(idea.status)) {
+      const reopened = await archive.update(idea.id, { status: 'reopen' });
+      if (reopened.queued) return archive.queuedText(reopened);
+    }
     return `✓ #${idea.id} ${clip(idea.title, 60)} → ${verdict}`;
   },
 

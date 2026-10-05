@@ -78,10 +78,10 @@ test('only this page may use the server: a property over hosts, origins, and con
       assert.equal(serve.allowed(post({ host }), port), own);
     }),
   );
-  const origins = fc.oneof(fc.string(), fc.webUrl(), fc.constantFrom('null', 'http://127.0.0.1:4333', 'https://127.0.0.1:4332', 'http://localhost:4332/'));
+  const origins = fc.oneof(fc.string(), fc.webUrl(), fc.constantFrom('null', 'http://127.0.0.1:4333', 'https://127.0.0.1:4333', 'http://localhost:4332/'));
   fc.assert(
     fc.property(origins, (origin) => {
-      fc.pre(origin !== 'http://127.0.0.1:4332');
+      fc.pre(origin !== 'http://127.0.0.1:4332' && origin !== 'https://127.0.0.1:4332');
       assert.equal(serve.allowed(post({ host: '127.0.0.1:4332', origin }), port), false);
     }),
   );
@@ -100,6 +100,9 @@ test('only this page may use the server: a property over hosts, origins, and con
   assert.equal(serve.allowed({ method: 'GET', host: '10.66.0.1' }, port, hosts), true);
   assert.equal(serve.allowed(post({ host: '10.66.0.1', origin: 'http://10.66.0.1' }), port, hosts), true);
   assert.equal(serve.allowed(post({ host: '10.66.0.1', origin: 'http://127.0.0.1:4332' }), port, hosts), false);
+  // nginx serves the page over HTTPS too (for the phone). Its buttons and drags must work there.
+  assert.equal(serve.allowed(post({ host: 'mem.equwal.com', origin: 'https://mem.equwal.com' }), port, ['mem.equwal.com']), true);
+  assert.equal(serve.allowed(post({ host: 'mem.equwal.com', origin: 'https://evil.example' }), port, ['mem.equwal.com']), false);
   fc.assert(
     fc.property(fc.string(), (host) => {
       assert.equal(serve.allowed({ method: 'GET', host }, port, hosts), ['127.0.0.1:4332', 'localhost:4332', '10.66.0.1'].includes(host.toLowerCase()));
@@ -396,6 +399,68 @@ test('a drag to the Do, Maybe, or Skip lane changes only the verdict', async () 
 
   assert.equal((await api('verdict', { id: 1, verdict: 'nope' })).error, 'verdict must be one of do/maybe/skip');
   assert.equal((await api('verdict', { id: 9, verdict: 'do' })).error, 'no idea #9');
+});
+
+// dropCommand of the page, run against a page state that has no Claude Code (the server role).
+const pageSource = fs.readFileSync(new URL('../dashboard/index.html', import.meta.url), 'utf8');
+const dropCommand = new Function('state', `${/function dropCommand[\s\S]*?\n}\n/.exec(pageSource)[0]}; return dropCommand;`)({ data: { live: {} } });
+
+/** Put idea `id` in `lane` the way the CLI and Claude do it. `triaged`: it got a verdict first. */
+function seed(id, lane, triaged) {
+  if (['do', 'maybe', 'skip'].includes(lane)) return store.applyTriage([{ id, verdict: lane }]);
+  if (triaged) store.applyTriage([{ id, verdict: 'do' }]);
+  store.updateIdea(id, { status: lane });
+}
+
+/** A POST from the page at https://mem.equwal.com, the way nginx passes it on. */
+function httpsPagePost(action, body) {
+  return new Promise((resolve, reject) => {
+    const host = 'mem.equwal.com';
+    const req = http.request(new URL(`api/${action}`, url), { method: 'POST', headers: { host, origin: `https://${host}`, 'content-type': 'application/json' } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, ...JSON.parse(Buffer.concat(chunks).toString()) }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+/** Drop idea `id` in `lane` on the board. Resolves to the lane that the idea is in afterwards. */
+async function drop(id, lane, post = api) {
+  const idea = { ...store.findIdea(store.load(), id) };
+  idea.lane = store.lane(idea);
+  const command = dropCommand(idea, lane);
+  const out = await post(command.action, command.body);
+  assert.equal(out.ok, true, out.error);
+  return store.lane(store.findIdea(store.load(), id));
+}
+
+test('on the HTTPS page, a drag from Do to Doing starts the idea, and a drag back to Do queues it again', async () => {
+  process.env.IDEAMINE_SERVE_HOSTS = 'mem.equwal.com';
+  try {
+    await api('add', { text: '- alpha' });
+    seed(1, 'do', true);
+    assert.equal(await drop(1, 'doing', httpsPagePost), 'doing');
+    assert.equal(await drop(1, 'do', httpsPagePost), 'do');
+    assert.equal(await drop(1, 'done', httpsPagePost), 'done');
+    assert.equal(await drop(1, 'maybe', httpsPagePost), 'maybe');
+  } finally {
+    delete process.env.IDEAMINE_SERVE_HOSTS;
+  }
+});
+
+test('a drag moves a card from any lane to any other lane: a property over every pair', async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.constantFrom(...store.LANES), fc.constantFrom(...store.LANES), fc.boolean(), async (from, to, triaged) => {
+      fc.pre(from !== to);
+      const [{ idea }] = store.addIdeas('an idea');
+      seed(idea.id, from, triaged);
+      assert.equal(store.lane(store.findIdea(store.load(), idea.id)), from);
+      assert.equal(await drop(idea.id, to), to, `${from} → ${to}`);
+    }),
+    { numRuns: 200 },
+  );
 });
 
 test('the server keeps the token use of each machine and puts a price on it', async () => {
