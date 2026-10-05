@@ -52,6 +52,13 @@ export const SETTINGS = {
     value: '',
     about: 'memstated daemon that the Memory tab of `ideamine serve` reads (empty: no Memory tab)',
   },
+  // The token of the hub is never a setting: it comes only from IDEAMINE_COOP_TOKEN.
+  coop_url: {
+    env: 'IDEAMINE_COOP_URL',
+    value: '',
+    about: 'coop hub whose agents build the ideas dropped in Doing (empty: off; needs IDEAMINE_COOP_TOKEN)',
+  },
+  coop_session: { env: 'IDEAMINE_COOP_SESSION', value: 'workers', about: 'coop session of those agents' },
 };
 
 const configPath = () => path.join(home(), 'config.json');

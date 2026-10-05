@@ -374,6 +374,17 @@ export function updateIdea(id, patch = {}) {
       idea.status = status;
       if (status === 'done' || status === 'dropped') idea.closed = now();
       else delete idea.closed;
+      if (status !== 'doing') delete idea.agent; // an agent works only on an idea in Doing
+    }
+    // agent "any": an agent of coop builds the idea (see coop.js). Only an idea in Doing can wait for one.
+    if (patch.agent != null) {
+      if (patch.agent !== 'any') throw new Error('agent must be "any"');
+      if (idea.status !== 'doing') throw new Error('only an idea in Doing can wait for an agent');
+      if (!idea.agent) {
+        idea.agent = { name: 'any', at: now() };
+        idea.notes ||= [];
+        idea.notes.push({ at: now(), text: 'waits for a free coop agent' });
+      }
     }
     if (patch.text) idea.text = String(patch.text).trim();
     if (patch.title) idea.title = clip(patch.title, 90);

@@ -238,6 +238,8 @@ async function main() {
       });
       server.on('close', () => process.exit(0)); // /ideas-web off
       console.log(serve.logLine(`the dashboard with buttons runs at ${url} (Ctrl+C stops it)`));
+      // Only the server role holds the archive, so only it gives ideas to coop agents.
+      if (!(await import('../src/sync.js')).enabled()) (await import('../src/coop.js')).start({ log: (text) => console.log(serve.logLine(text)) });
       break;
     }
     case 'sync': {

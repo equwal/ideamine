@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as archive from './archive.js';
 import * as config from './config.js';
+import * as coop from './coop.js';
 import * as publish from './publish.js';
 import { renderAdded, stamp } from './render.js';
 import * as store from './store.js';
@@ -174,6 +175,7 @@ async function liveData() {
       prompts: synced || fs.existsSync(promptsPath()),
       memory: synced || !!config.get('memstate_url'),
       usage: synced || fs.existsSync(transcriptsDir()) || Object.keys(loadUsage().machines).length > 0,
+      coop: !synced && !!coop.settings(), // a drop in Doing asks a coop agent to build the idea
     },
   };
 }
@@ -411,10 +413,10 @@ const ACTIONS = {
     return gone.queued ? archive.queuedText(gone) : gone.map((i) => `Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
   },
 
-  /** /ideas-done, /ideas-reopen, and the verbs start, drop, note, and model of the CLI. */
-  async update({ id, status, note, model }) {
-    if (!status && !note && !model) throw new Error('nothing to change');
-    const idea = await archive.update(id, { status, note, model });
+  /** /ideas-done, /ideas-reopen, and the verbs start, drop, note, and model of the CLI. agent "any": a coop agent builds it. */
+  async update({ id, status, note, model, agent }) {
+    if (!status && !note && !model && !agent) throw new Error('nothing to change');
+    const idea = await archive.update(id, { status, note, model, agent });
     if (idea.queued) return archive.queuedText(idea);
     const bits = [`#${idea.id} ${clip(idea.title, 60)} → ${store.lane(idea)}`];
     if (model) bits.push(`model ${idea.triage.model}`);

@@ -28,7 +28,7 @@ beforeEach(async () => {
   // The triage and the questions must never reach the real claude or the projects of this machine.
   process.env.IDEAMINE_CLAUDE_BIN = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));
   process.env.CLAUDE_CONFIG_DIR = process.env.IDEAMINE_HOME;
-  for (const name of ['IDEAMINE_SYNC_URL', 'IDEAMINE_MEMSTATE_URL', 'IDEAMINE_SERVE_HOSTS', 'IDEAMINE_PROMPT_LOG']) delete process.env[name];
+  for (const name of ['IDEAMINE_SYNC_URL', 'IDEAMINE_MEMSTATE_URL', 'IDEAMINE_SERVE_HOSTS', 'IDEAMINE_PROMPT_LOG', 'IDEAMINE_COOP_URL', 'IDEAMINE_COOP_TOKEN']) delete process.env[name];
   embedServer = await startFakeServer();
   process.env.IDEAMINE_EMBED_URL = `${embedServer.url}/v1`;
   opened = [];
@@ -142,6 +142,7 @@ test('the page comes with live data, and no other page can frame it', async () =
     prompts: false,
     memory: false,
     usage: false, // no transcripts of Claude Code in the test home
+    coop: false, // no coop hub: a drop in Doing only moves the card
   });
   assert.match(data.live.watch.status, /^ideamine watch: off/);
 });
