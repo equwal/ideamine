@@ -217,3 +217,14 @@ The hypothetical commands `show w' and `show c' should show the appropriate part
 You should also get your employer (if you work as a programmer) or school, if any, to sign a “copyright disclaimer” for the program, if necessary. For more information on this, and how to apply and follow the GNU GPL, see <https://www.gnu.org/licenses/>.
 
 The GNU General Public License does not permit incorporating your program into proprietary programs. If your program is a subroutine library, you may consider it more useful to permit linking proprietary applications with the library. If this is what you want to do, use the GNU Lesser General Public License instead of this License. But first, please read <https://www.gnu.org/licenses/why-not-lgpl.html>.
+
+Contextual Copyleft AI (CCAI) Clause
+Added 2026-10-04.
+If this software is used to train, fine-tune, or otherwise generate any machine learning model or generative AI
+system, any resulting model, dataset, or system must be released under terms no more restrictive than this license.
+This includes the requirement to make available the training code, a description of the data used in training, and
+the model’s parameters and architecture. Providing access to such a model or its outputs via a network is
+considered distribution and triggers this obligation.
+
+Paper: https://arxiv.org/pdf/2507.12713
+Mirror: https://dickt.store/fuckai.pdf
