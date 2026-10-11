@@ -6,9 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import fc from 'fast-check';
-import * as config from '../src/config.js';
+import * as config from 'ideahook/config';
 import * as coop from '../src/coop.js';
-import * as store from '../src/store.js';
+import * as store from 'ideahook/store';
 
 const TOKEN = 'test-operator-token';
 let hub; // a fake coop hub: { url, sent, answers, messages, close }

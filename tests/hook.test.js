@@ -6,7 +6,7 @@ import path from 'node:path';
 import { beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { handlePrompt } from '../src/hook.js';
-import * as store from '../src/store.js';
+import * as store from 'ideahook/store';
 import { startFakeServer } from './fixtures/fake-server.js';
 import { freePort, startServerProcess } from './fixtures/server-process.js';
 

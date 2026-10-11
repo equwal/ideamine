@@ -8,8 +8,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stamp } from './render.js';
-import { home, lane, load } from './store.js';
+import { stamp } from 'ideahook/render';
+import { home, lane, load } from 'ideahook/store';
 
 const MODEL = 'haiku';
 const RETRY_WAITS_MS = [30 * 1000, 2 * 60 * 1000]; // after a failed call, in the same pass

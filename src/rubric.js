@@ -2,8 +2,8 @@
 // /ideas-go and /ideas-sort, and the headless `ideamine sort`) read this file.
 
 import path from 'node:path';
-import { lane, listIdeas } from './store.js';
-import { clip } from './text.js';
+import { lane, listIdeas } from 'ideahook/store';
+import { clip } from 'ideahook/text';
 
 // Aliases are what Claude Code accepts (`claude --model sonnet`, Agent tool `model: "sonnet"`),
 // so a recommendation stays valid when a new generation ships under the same alias.

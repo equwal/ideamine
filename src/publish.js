@@ -8,9 +8,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as config from './config.js';
-import * as embed from './embed.js';
-import { baseName, counts, dbPath, home, lane, LANES, listIdeas, load, MODEL_ALIASES, SIZES } from './store.js';
+import * as config from 'ideahook/config';
+import * as embed from 'ideahook/embed';
+import { baseName, counts, dbPath, home, lane, LANES, listIdeas, load, MODEL_ALIASES, SIZES } from 'ideahook/store';
 
 const PAGE = new URL('../dashboard/index.html', import.meta.url);
 const WAIT_AFTER_ERROR_MS = 10 * 60 * 1000; // after a failed publish, before kick() tries again

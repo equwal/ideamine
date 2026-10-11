@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import * as store from './store.js';
+import * as store from 'ideahook/store';
 
 /**
  * Price in dollars for each million tokens (2026-09-22). `read` is the price of a cache read.

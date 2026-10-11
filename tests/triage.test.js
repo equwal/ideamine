@@ -5,7 +5,7 @@ import path from 'node:path';
 import { beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { headlessTriage } from '../src/claude.js';
-import * as store from '../src/store.js';
+import * as store from 'ideahook/store';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));
 let log;

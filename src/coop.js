@@ -6,9 +6,9 @@
 // idea.agent: { name: 'any' } waits; { name: 'coop' } is being sent; { name, msg } is with the
 // agent `name` (agent@machine), and msg is the id of the coop message with the task.
 
-import * as config from './config.js';
-import * as store from './store.js';
-import { clip } from './text.js';
+import * as config from 'ideahook/config';
+import * as store from 'ideahook/store';
+import { clip } from 'ideahook/text';
 
 const ROUND_MS = 15000;
 const SEND_MS = 60000; // a card that stays "being sent" longer than this waits again (the server stopped mid-send)

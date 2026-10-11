@@ -74,10 +74,10 @@ async function main() {
   if (command === 'mcp') return (await import('../src/mcp.js')).serve({ prompts: !rest.includes('--plugin') });
   if (command === 'hook') return (await import('../src/hook.js')).runHook();
 
-  const store = await import('../src/store.js');
-  const archive = await import('../src/archive.js');
-  const render = await import('../src/render.js');
-  const { splitIdeas, clip } = await import('../src/text.js');
+  const store = await import('ideahook/store');
+  const archive = await import('ideahook/archive');
+  const render = await import('ideahook/render');
+  const { splitIdeas, clip } = await import('ideahook/text');
   const { flags, words } = parseArgs(rest);
   const cwd = process.cwd();
   const needId = () => words[0] || fail(`usage: ideamine ${command} <id>`);
@@ -194,13 +194,13 @@ async function main() {
       break;
     }
     case 'find': {
-      const embed = await import('../src/embed.js');
+      const embed = await import('ideahook/embed');
       const query = words.join(' ') || fail('usage: ideamine find <words...>');
       console.log(render.renderFound(await embed.find(await archive.fresh(), query), query, { cwd }));
       break;
     }
     case 'groups': {
-      const embed = await import('../src/embed.js');
+      const embed = await import('ideahook/embed');
       const lower = words.map((w) => (w === '-a' ? 'all' : w.toLowerCase()));
       const filter = lower.find((w) => store.FILTERS.includes(w)) || 'open';
       const ideas = store.listIdeas(await archive.fresh(), { filter });
@@ -208,7 +208,7 @@ async function main() {
       break;
     }
     case 'embed': {
-      const embed = await import('../src/embed.js');
+      const embed = await import('ideahook/embed');
       console.log(await embed.status(store.load()));
       break;
     }
@@ -218,7 +218,7 @@ async function main() {
         process.exitCode = (await publish.backgroundPublish()) === 'error' ? 1 : 0;
         break;
       }
-      const config = await import('../src/config.js');
+      const config = await import('ideahook/config');
       if (words[0] === 'off') {
         config.set('publish_url', '');
         console.log(publish.status());
@@ -239,11 +239,12 @@ async function main() {
       server.on('close', () => process.exit(0)); // /ideas-web off
       console.log(serve.logLine(`the dashboard with buttons runs at ${url} (Ctrl+C stops it)`));
       // Only the server role holds the archive, so only it gives ideas to coop agents.
-      if (!(await import('../src/sync.js')).enabled()) (await import('../src/coop.js')).start({ log: (text) => console.log(serve.logLine(text)) });
+      if (!(await import('ideahook/sync')).enabled()) (await import('../src/coop.js')).start({ log: (text) => console.log(serve.logLine(text)) });
       break;
     }
     case 'sync': {
-      const sync = await import('../src/sync.js');
+      (await import('../src/hook.js')).configureSync();
+      const sync = await import('ideahook/sync');
       if (flags.background) {
         process.exitCode = (await sync.backgroundSync()) === 'error' ? 1 : 0;
         break;
@@ -264,7 +265,7 @@ async function main() {
       break;
     }
     case 'prompts': {
-      const sync = await import('../src/sync.js');
+      const sync = await import('ideahook/sync');
       if (words[0] !== 'import') fail('usage: ideamine prompts import');
       if (!sync.enabled()) fail('the prompt log goes to an ideamine server. Turn sync on first: ideamine sync <url>');
       console.log(`Put ${sync.importPrompts()} prompts from ${sync.transcriptsDir()} into the prompt outbox. The next sync sends them.`);
@@ -289,7 +290,7 @@ async function main() {
       break;
     }
     case 'config': {
-      const config = await import('../src/config.js');
+      const config = await import('ideahook/config');
       if (words.length >= 1 && rest.length >= 2) config.set(words[0], words.slice(1).join(' '));
       else if (words.length === 1 && rest.length === 1) {
         console.log(config.get(words[0]));

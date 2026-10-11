@@ -44,5 +44,8 @@
   ],
   "devDependencies": {
     "fast-check": "^4.10.2"
+  },
+  "dependencies": {
+    "ideahook": "github:equwal/ideahook#v1.0.1"
   }
 }

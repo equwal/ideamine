@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as store from '../src/store.js';
+import * as store from 'ideahook/store';
 import * as watch from '../src/watch.js';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-claude.js', import.meta.url));

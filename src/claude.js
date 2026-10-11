@@ -3,11 +3,11 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import { fresh, triage } from './archive.js';
-import { knownProjects } from './projects.js';
-import { renderMarkdown } from './render.js';
+import { fresh, triage } from 'ideahook/archive';
+import { knownProjects } from 'ideahook/projects';
+import { renderMarkdown } from 'ideahook/render';
 import { BATCH_SCHEMA, pendingIdeas, triagePrompt } from './rubric.js';
-import { counts, findIdea, normalizeModel } from './store.js';
+import { counts, findIdea, normalizeModel } from 'ideahook/store';
 
 /** Claude Code executable: explicit override, else the one running us (desktop app), else PATH. */
 export function claudeBin() {

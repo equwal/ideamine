@@ -4,15 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, beforeEach, test } from 'node:test';
 import fc from 'fast-check';
-import * as archive from '../src/archive.js';
-import * as store from '../src/store.js';
-import * as sync from '../src/sync.js';
+import * as archive from 'ideahook/archive';
+import * as store from 'ideahook/store';
+import * as sync from 'ideahook/sync';
+import { configureSync } from '../src/hook.js';
 import { freePort, startServerProcess } from './fixtures/server-process.js';
 
 let server;
 let deadUrl; // an address where nothing answers: the tunnel of a machine is down
 
 before(async () => {
+  configureSync();
   server = await startServerProcess();
   deadUrl = `http://127.0.0.1:${await freePort()}/`;
 });

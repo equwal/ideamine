@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import fc from 'fast-check';
-import * as config from '../src/config.js';
-import * as embed from '../src/embed.js';
+import * as config from 'ideahook/config';
+import * as embed from 'ideahook/embed';
 import * as publish from '../src/publish.js';
-import * as store from '../src/store.js';
+import * as store from 'ideahook/store';
 import { startFakeServer } from './fixtures/fake-server.js';
 
 let server;

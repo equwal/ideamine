@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import fc from 'fast-check';
 import { handlePrompt } from '../src/hook.js';
 import * as serve from '../src/serve.js';
-import * as store from '../src/store.js';
+import * as store from 'ideahook/store';
 import { startFakeMemstate } from './fixtures/fake-memstate.js';
 import { startFakeServer } from './fixtures/fake-server.js';
 import { startServerProcess } from './fixtures/server-process.js';
