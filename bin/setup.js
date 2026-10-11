@@ -14,9 +14,8 @@ const want = mtime(path.join(root, 'package-lock.json'));
 const hook = fs.existsSync(path.join(root, 'node_modules', 'ideahook'));
 if (hook && have >= want) process.exit(0);
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const r = spawnSync(npm, ['ci', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'],
-  { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' });
+const r = spawnSync('npm ci --omit=dev --no-audit --no-fund --loglevel=error',
+  { cwd: root, encoding: 'utf8', shell: true }); // shell: finds npm.cmd on Windows
 if (r.status !== 0) {
   process.stderr.write(`ideamine: npm ci failed\n${r.stdout || ''}${r.stderr || ''}`);
   process.exit(1);
