@@ -1293,13 +1293,12 @@ const projectLabel = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || St
 function usageByProject(rows) {
   const out = new Map();
   for (const r of rows) {
-    const p = out.get(r.project) || { project: r.project, cost: 0, input: 0, output: 0, read: 0, write: 0, messages: 0, models: new Map() };
+    const p = out.get(r.project) || { project: r.project, cost: 0, input: 0, output: 0, read: 0, write: 0, models: new Map() };
     p.cost += r.cost || 0;
     p.input += r.input || 0;
     p.output += r.output || 0;
     p.read += r.read || 0;
     p.write += (r.write5m || 0) + (r.write1h || 0);
-    p.messages += r.messages || 0;
     const m = p.models.get(r.model) || { model: r.model, cost: 0, output: 0 };
     m.cost += r.cost || 0;
     m.output += r.output || 0;
@@ -1339,14 +1338,13 @@ function renderUsage() {
       el('td', {}, tokenCount(p.input)),
       el('td', {}, tokenCount(p.output)),
       el('td', {}, tokenCount(p.write)),
-      el('td', {}, tokenCount(p.read)),
-      el('td', {}, String(p.messages))));
+      el('td', {}, tokenCount(p.read))));
   }
   $main.append(el('div', { class: 'table-wrap' },
     el('table', { class: 'idea-table' },
       el('thead', {}, el('tr', {},
         el('th', {}, 'Project'), el('th', {}, 'Price'), el('th', {}, 'Models'),
-        el('th', {}, 'In'), el('th', {}, 'Out'), el('th', {}, 'Cache write'), el('th', {}, 'Cache read'), el('th', {}, 'Answers'))),
+        el('th', {}, 'In'), el('th', {}, 'Out'), el('th', {}, 'Cache write'), el('th', {}, 'Cache read'))),
       body)));
 }
 

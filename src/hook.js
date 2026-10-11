@@ -9,7 +9,7 @@ import * as watch from './watch.js';
 
 // Background syncs run through the ideamine CLI, which also sends the token use.
 export const configureSync = () =>
-  sync.configure({ usage: () => import('./usage.js'), bin: fileURLToPath(new URL('../bin/ideamine.js', import.meta.url)) });
+  sync.configure({ usage: () => import('ideaprofile/usage'), bin: fileURLToPath(new URL('../bin/ideamine.js', import.meta.url)) });
 configureSync();
 
 const extraVerbs = {

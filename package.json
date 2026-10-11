@@ -1,6 +1,6 @@
 {
   "name": "ideamine",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "description": "An idea inbox for Claude Code. /idea saves an idea without calling the model; Claude later triages each idea and picks the cheapest model that can build it.",
   "type": "module",
   "bin": {
@@ -46,6 +46,7 @@
     "fast-check": "^4.10.2"
   },
   "dependencies": {
-    "ideahook": "github:equwal/ideahook#v1.0.1"
+    "ideahook": "github:equwal/ideahook#v1.0.1",
+    "ideaprofile": "github:equwal/ideaprofile#v1.0.0"
   }
 }

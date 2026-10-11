@@ -464,12 +464,12 @@ test('a drag moves a card from any lane to any other lane: a property over every
   );
 });
 
-test('the server keeps the token use of each machine and puts a price on it', async () => {
-  const row = { day: '2026-09-22', project: 'C:\work', model: 'claude-opus-5', messages: 1, input: 0, output: 1000000, read: 0, write5m: 0, write1h: 0 };
+test('the server keeps the token use and the price of each machine', async () => {
+  const row = { day: '2026-09-22', project: 'C:\work', model: 'claude-opus-5', messages: 1, input: 0, output: 1000000, read: 0, write5m: 0, write1h: 0, cost: 25 };
   assert.equal((await api('usage', { machine: 'm1', host: 'pc1', rows: [row] })).rows, 1);
   const first = await (await fetch(new URL('api/usage', url))).json();
   assert.equal(first.rows.length, 1);
-  assert.equal(first.rows[0].cost, 25); // 1M output tokens on Opus 5
+  assert.equal(first.rows[0].cost, 25);
   assert.equal(first.rows[0].host, 'pc1');
 
   // The same machine sends again: the new rows take the place of the rows from before.

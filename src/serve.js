@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import * as archive from 'ideahook/archive';
 import * as config from 'ideahook/config';
 import * as coop from './coop.js';
+import * as profile from 'ideaprofile/routes';
 import * as publish from './publish.js';
 import { renderAdded, stamp } from 'ideahook/render';
 import * as store from 'ideahook/store';
@@ -32,12 +33,9 @@ const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
 const MAX_BODY = 1024 * 1024;
 const EMBED_TIMEOUT_MS = 5000; // data.json must not wait long for an embedding server that is away
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
-const DAY = 86400000;
 const APPLIED_KEPT = 1000; // results of recent changes, so that a change that comes twice applies once
 
 const logPath = () => path.join(store.home(), 'serve.log');
-const promptsPath = () => path.join(store.home(), 'prompts.jsonl');
-const usagePath = () => path.join(store.home(), 'usage.json');
 const appliedPath = () => path.join(store.home(), 'applied.json');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -161,9 +159,9 @@ async function liveData() {
   const db = await archive.fresh();
   const { data, note } = await publish.build(db, { timeoutMs: EMBED_TIMEOUT_MS });
   const { hasClaude } = await import('./claude.js');
-  const { transcriptsDir } = await import('./usage.js');
   const w = watch.readState();
   const synced = sync.enabled();
+  const here = profile.live();
   return {
     ...data,
     live: {
@@ -172,9 +170,9 @@ async function liveData() {
       claude: hasClaude(),
       watch: { on: !!w.on, status: watch.status() },
       sync: synced ? { url: sync.serverUrl(), offline: archive.offlineReason(), waiting: sync.waiting() } : null,
-      prompts: synced || fs.existsSync(promptsPath()),
-      memory: synced || !!config.get('memstate_url'),
-      usage: synced || fs.existsSync(transcriptsDir()) || Object.keys(loadUsage().machines).length > 0,
+      prompts: synced || here.prompts,
+      memory: synced || here.memory,
+      usage: synced || here.usage,
       coop: !synced && !!coop.settings(), // a drop in Doing asks a coop agent to build the idea
     },
   };
@@ -257,144 +255,6 @@ function applyChanges(ops) {
   store.withLock(() => store.writeAtomic(appliedPath(), JSON.stringify(Object.fromEntries(kept))));
   return results;
 }
-
-let promptCache = null;
-
-/** The prompt log: one JSON line for each prompt. The copy in memory is kept until the file changes. */
-function loadPrompts() {
-  const st = fs.statSync(promptsPath(), { throwIfNoEntry: false });
-  if (!st) return { prompts: [], ids: new Set() };
-  if (promptCache?.mtime === st.mtimeMs && promptCache.size === st.size) return promptCache;
-  const prompts = [];
-  for (const line of fs.readFileSync(promptsPath(), 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      prompts.push(JSON.parse(line));
-    } catch {
-      // A line that a crash cut in half.
-    }
-  }
-  promptCache = { mtime: st.mtimeMs, size: st.size, prompts, ids: new Set(prompts.map((p) => p.id)) };
-  return promptCache;
-}
-
-const field = (v, max = 300) => (v == null ? null : String(v).slice(0, max));
-
-/** Add prompts that the log does not have yet. A prompt without an id, a time, or a text is skipped. */
-function addPrompts(list) {
-  if (!Array.isArray(list)) throw new Error('prompts must be a list');
-  const { ids } = loadPrompts();
-  const add = [];
-  let skipped = 0;
-  for (const p of list) {
-    const bad = !p || typeof p.id !== 'string' || !p.id || typeof p.prompt !== 'string' || Number.isNaN(Date.parse(p.at));
-    if (bad) skipped++;
-    if (bad || ids.has(p.id)) continue;
-    ids.add(p.id);
-    add.push({ id: p.id.slice(0, 64), at: new Date(p.at).toISOString(), host: field(p.host, 100), session: field(p.session, 100), cwd: field(p.cwd), prompt: p.prompt });
-  }
-  if (add.length) store.withLock(() => fs.appendFileSync(promptsPath(), add.map((p) => `${JSON.stringify(p)}\n`).join('')));
-  return { added: add.length, skipped };
-}
-
-/** The prompts of the last `days` days (all prompts for 0), oldest first. */
-function listPrompts(days) {
-  const since = days > 0 ? Date.now() - days * DAY : 0;
-  return loadPrompts().prompts.filter((p) => Date.parse(p.at) >= since).sort((a, b) => a.at.localeCompare(b.at));
-}
-
-/* ---- token use and price ---- */
-
-/** The rows that the machines sent, by machine id. */
-function loadUsage() {
-  try {
-    const data = JSON.parse(fs.readFileSync(usagePath(), 'utf8'));
-    if (data && data.version === 1 && data.machines) return data;
-  } catch {
-    // No machine sent rows yet.
-  }
-  return { version: 1, machines: {} };
-}
-
-/** Keep the rows of one machine. The new rows take the place of the rows from before. */
-function saveUsage({ machine, host, rows }) {
-  if (typeof machine !== 'string' || !machine || !Array.isArray(rows)) throw new Error('a machine id and its rows must come together');
-  const clean = rows
-    .filter((r) => r && /^\d{4}-\d{2}-\d{2}$/.test(String(r.day)) && typeof r.project === 'string' && typeof r.model === 'string')
-    .map((r) => ({
-      day: r.day,
-      project: String(r.project).slice(0, 300),
-      model: String(r.model).slice(0, 60),
-      messages: Number(r.messages) || 0,
-      input: Number(r.input) || 0,
-      output: Number(r.output) || 0,
-      read: Number(r.read) || 0,
-      write5m: Number(r.write5m) || 0,
-      write1h: Number(r.write1h) || 0,
-    }));
-  const data = loadUsage();
-  data.machines[machine.slice(0, 64)] = { host: field(host, 100), at: new Date().toISOString(), rows: clean };
-  store.withLock(() => store.writeAtomic(usagePath(), `${JSON.stringify(data)}\n`));
-  return { rows: clean.length, machines: Object.keys(data.machines).length };
-}
-
-/** Every row of every machine, each one with the machine that sent it. */
-function usageRows() {
-  const out = [];
-  for (const [machine, m] of Object.entries(loadUsage().machines)) {
-    for (const r of m.rows || []) out.push({ ...r, machine, host: m.host });
-  }
-  return out;
-}
-
-/** The rows of this machine, read from the transcripts of Claude Code. */
-async function localUsage() {
-  const usage = await import('./usage.js');
-  const { rows } = usage.scan();
-  return rows.map((r) => ({ ...r, machine: 'here', host: os.hostname() }));
-}
-
-/** A read from the memstated daemon at memstate_url. */
-async function memstate(route, body) {
-  const base = config.get('memstate_url');
-  if (!base) throw new Error('this server shows no memories. Set memstate_url, for example: ideamine config memstate_url http://127.0.0.1:8765');
-  const url = `${base.replace(/\/+$/, '')}${route}`;
-  const init = { signal: AbortSignal.timeout(8000) };
-  if (body) Object.assign(init, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  let res;
-  try {
-    res = await fetch(url, init);
-  } catch {
-    throw new Error(`cannot reach memstated at ${base}`);
-  }
-  const json = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(`memstated answered ${res.status}: ${json?.error || 'no reason'}`);
-  return json;
-}
-
-// The Memory tab reads memstated. It never writes there.
-const MEMORY = {
-  /** Every project, and every current memory without its text, for the list and the timeline. */
-  async overview() {
-    const { projects } = await memstate('/api/v1/projects');
-    const memories = [];
-    for (const p of projects) {
-      const { memories: list } = await memstate('/api/v1/keypaths', { project_id: p.id });
-      for (const m of list) memories.push({ id: m.id, project_id: p.id, keypath: m.keypath, category: m.category || null, version: m.version, created_at: m.created_at });
-    }
-    return { projects, memories };
-  },
-  /** The current memories of one project, with their text. */
-  async project(query) {
-    const { memories } = await memstate('/api/v1/keypaths', { project_id: query.get('id') || '', include_content: true });
-    return { memories };
-  },
-  /** Every version of one memory, oldest first. */
-  async history(query) {
-    const { versions } = await memstate('/api/v1/memories/history', { project_id: query.get('project') || '', keypath: query.get('keypath') || '' });
-    return { versions };
-  },
-};
 
 // ---------------------------------------------------------------------------------------------
 // The slash commands. Each one takes the JSON body and returns the text to show on the page.
@@ -504,22 +364,7 @@ async function serverRoute(req, res, route, query) {
     const { ops } = await readJson(req);
     return send(res, 200, { ok: true, results: applyChanges(ops), db: store.load() });
   }
-  if (route === 'GET /api/usage') {
-    const usage = await import('./usage.js');
-    const sent = usageRows();
-    const rows = sent.length ? sent : await localUsage();
-    // The price comes from the server, so that one price list serves every page.
-    return send(res, 200, { ok: true, rows: rows.map((r) => ({ ...r, cost: usage.cost(r) })) });
-  }
-  if (route === 'POST /api/usage') return send(res, 200, { ok: true, ...saveUsage(await readJson(req)) });
-  if (route === 'POST /api/prompts') {
-    const { prompts } = await readJson(req);
-    return send(res, 200, { ok: true, ...addPrompts(prompts) });
-  }
-  if (route === 'GET /api/prompts') return send(res, 200, { ok: true, prompts: listPrompts(Number(query.get('days')) || 0) });
-  const memory = route.startsWith('GET /api/memory/') && route.slice('GET /api/memory/'.length);
-  if (memory && Object.hasOwn(MEMORY, memory)) return send(res, 200, { ok: true, ...(await MEMORY[memory](query)) });
-  return false;
+  return profile.routes(req, res, { route, query, send, readJson });
 }
 
 async function handle(req, res, ctx) {

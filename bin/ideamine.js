@@ -272,19 +272,19 @@ async function main() {
       break;
     }
     case 'usage': {
-      const usage = await import('../src/usage.js');
+      const usage = await import('ideaprofile/usage');
       const days = Number(words[0]) || 0;
       const { rows, files } = usage.scan();
       const projects = usage.byProject(usage.since(rows, days));
       const money = (n) => `$${n.toFixed(2)}`;
       const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
       const total = projects.reduce((n, p) => n + p.cost, 0);
-      console.log(`ideamine usage: ${money(total)} in ${days ? `the last ${days} days` : 'all time'}, from ${files} transcripts. The price is the price of the API.`);
+      console.log(`ideamine usage: ${money(total)} in ${days ? `the last ${days} days` : 'all time'}, from ${files} projects, priced by ccusage. The price is the price of the API.`);
       for (const p of projects.slice(0, Number(process.env.IDEAMINE_USAGE_LIMIT) || 20)) {
         console.log(`\n  ${money(p.cost).padStart(9)}  ${p.project}`);
-        console.log(`             in ${tokens(p.input)} · out ${tokens(p.output)} · cache write ${tokens(p.write5m + p.write1h)} · cache read ${tokens(p.read)} · ${p.messages} answers`);
+        console.log(`             in ${tokens(p.input)} · out ${tokens(p.output)} · cache write ${tokens(p.write5m + p.write1h)} · cache read ${tokens(p.read)}`);
         for (const m of Object.values(p.models).sort((a, b) => b.cost - a.cost)) {
-          console.log(`             ${money(m.cost).padStart(9)}  ${m.model}${usage.priced(m.model) ? '' : ' (no price for this model)'}`);
+          console.log(`             ${money(m.cost).padStart(9)}  ${m.model}`);
         }
       }
       break;
