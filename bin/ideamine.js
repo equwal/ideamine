@@ -215,7 +215,8 @@ async function main() {
       break;
     }
     case 'publish': {
-      const publish = await import('../src/publish.js');
+      const publish = await import('ideamine-web/publish');
+      publish.configure({ bin: fileURLToPath(import.meta.url) });
       if (flags.background) {
         process.exitCode = (await publish.backgroundPublish()) === 'error' ? 1 : 0;
         break;
@@ -233,7 +234,8 @@ async function main() {
       break;
     }
     case 'serve': {
-      const serve = await import('../src/serve.js');
+      const serve = await import('ideamine-web/serve');
+      serve.configure({ bin: fileURLToPath(import.meta.url) });
       const { server, url } = await serve.start({
         ...(flags.port ? { port: Number(flags.port) } : {}),
         log: (text) => console.log(serve.logLine(text)),
