@@ -3,6 +3,7 @@
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const HELP = `ideamine: an idea inbox for Claude Code
 
@@ -143,7 +144,7 @@ async function main() {
       break;
     }
     case 'go': {
-      const { goPlan, launchSession, pipelinePrompt } = await import('../src/claude.js');
+      const { goPlan, launchSession, pipelinePrompt } = await import('ideaboard/claude');
       const db = await archive.fresh();
       const idea = words[0] ? store.findIdea(db, words[0]) : store.pickNext(db, { project: cwd });
       if (!idea) fail(words[0] ? `no idea #${words[0]}` : 'nothing is ready to build; run: ideamine sort');
@@ -160,7 +161,7 @@ async function main() {
       break;
     }
     case 'sort': {
-      const { headlessTriage } = await import('../src/claude.js');
+      const { headlessTriage } = await import('ideaboard/claude');
       const out = await headlessTriage({
         model: typeof flags.model === 'string' ? flags.model : undefined,
         limit: Number(flags.limit) || 20,
@@ -179,7 +180,8 @@ async function main() {
       break;
     }
     case 'watch': {
-      const watch = await import('../src/watch.js');
+      const watch = await import('ideaboard/watch');
+      watch.configure({ bin: fileURLToPath(import.meta.url) });
       if (words[0] === 'off') watch.turnOff();
       else {
         watch.turnOn();
@@ -189,7 +191,7 @@ async function main() {
       break;
     }
     case 'watch-pass': {
-      const watch = await import('../src/watch.js');
+      const watch = await import('ideaboard/watch');
       if ((await watch.pass()) === 'error') process.exitCode = 1;
       break;
     }
@@ -239,7 +241,7 @@ async function main() {
       server.on('close', () => process.exit(0)); // /ideas-web off
       console.log(serve.logLine(`the dashboard with buttons runs at ${url} (Ctrl+C stops it)`));
       // Only the server role holds the archive, so only it gives ideas to coop agents.
-      if (!(await import('ideahook/sync')).enabled()) (await import('../src/coop.js')).start({ log: (text) => console.log(serve.logLine(text)) });
+      if (!(await import('ideahook/sync')).enabled()) (await import('ideaboard/coop')).start({ log: (text) => console.log(serve.logLine(text)) });
       break;
     }
     case 'sync': {

@@ -2,23 +2,20 @@
 // board: /ideas-watch, /ideas-web, the watcher, and the dashboard upload.
 
 import { fileURLToPath } from 'node:url';
+import * as watch from 'ideaboard/watch';
 import * as ideahook from 'ideahook/hook';
 import * as sync from 'ideahook/sync';
 import * as publish from './publish.js';
-import * as watch from './watch.js';
+
+const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
+watch.configure({ bin: BIN });
 
 // Background syncs run through the ideamine CLI, which also sends the token use.
-export const configureSync = () =>
-  sync.configure({ usage: () => import('ideaprofile/usage'), bin: fileURLToPath(new URL('../bin/ideamine.js', import.meta.url)) });
+export const configureSync = () => sync.configure({ usage: () => import('ideaprofile/usage'), bin: BIN });
 configureSync();
 
 const extraVerbs = {
-  'ideas-watch': async (arg) => {
-    if (!arg) watch.turnOn();
-    else if (/^off$/i.test(arg)) watch.turnOff();
-    else return null;
-    return watch.status(); // runHook starts the first pass after this
-  },
+  ...watch.verbs,
   'ideas-web': async (arg) => {
     // Loaded here, not at the top: the hook runs for each prompt.
     const serve = await import('./serve.js');

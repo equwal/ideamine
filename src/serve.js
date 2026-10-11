@@ -14,22 +14,23 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as archive from 'ideahook/archive';
 import * as config from 'ideahook/config';
-import * as coop from './coop.js';
+import * as board from 'ideaboard/routes';
+import * as coop from 'ideaboard/coop';
+import * as watch from 'ideaboard/watch';
 import * as profile from 'ideaprofile/routes';
 import * as publish from './publish.js';
 import { renderAdded, stamp } from 'ideahook/render';
 import * as store from 'ideahook/store';
 import * as sync from 'ideahook/sync';
 import { clip, splitIdeas } from 'ideahook/text';
-import * as watch from './watch.js';
 
 const PAGE = new URL('../dashboard/index.html', import.meta.url);
 const BIN = fileURLToPath(new URL('../bin/ideamine.js', import.meta.url));
+watch.configure({ bin: BIN });
 const MAX_BODY = 1024 * 1024;
 const EMBED_TIMEOUT_MS = 5000; // data.json must not wait long for an embedding server that is away
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
@@ -158,7 +159,7 @@ async function readJson(req) {
 async function liveData() {
   const db = await archive.fresh();
   const { data, note } = await publish.build(db, { timeoutMs: EMBED_TIMEOUT_MS });
-  const { hasClaude } = await import('./claude.js');
+  const { hasClaude } = await import('ideaboard/claude');
   const w = watch.readState();
   const synced = sync.enabled();
   const here = profile.live();
@@ -273,89 +274,8 @@ const ACTIONS = {
     return gone.queued ? archive.queuedText(gone) : gone.map((i) => `Removed #${i.id} · ${clip(i.title, 60)}`).join('\n');
   },
 
-  /** /ideas-done, /ideas-reopen, and the verbs start, drop, note, and model of the CLI. agent "any": a coop agent builds it. */
-  async update({ id, status, note, model, agent }) {
-    if (!status && !note && !model && !agent) throw new Error('nothing to change');
-    const idea = await archive.update(id, { status, note, model, agent });
-    if (idea.queued) return archive.queuedText(idea);
-    const bits = [`#${idea.id} ${clip(idea.title, 60)} → ${store.lane(idea)}`];
-    if (model) bits.push(`model ${idea.triage.model}`);
-    if (note) bits.push('note added');
-    return `✓ ${bits.join(' · ')}`;
-  },
-
-  /**
-   * A drag on the board into the Do, Maybe, or Skip lane. The verdict changes, and an idea from
-   * Doing, Done, or Dropped goes back in the queue. The rest of the triage (impact, size, model,
-   * why, brief) stays as it is.
-   */
-  async verdict({ id, verdict }) {
-    const db = await archive.fresh();
-    const idea = store.findIdea(db, id);
-    if (!idea) throw new Error(`no idea #${id}`);
-    const out = await archive.triage([{ ...(idea.triage || {}), id: idea.id, verdict }], { by: 'web' });
-    if (out.queued) return archive.queuedText(out);
-    const failed = Array.isArray(out) && out[0] && out[0].error;
-    if (failed) throw new Error(failed);
-    // A verdict alone moves only an idea in the inbox. "reopen" puts a started or closed one in its lane.
-    if (!['inbox', 'triaged'].includes(idea.status)) {
-      const reopened = await archive.update(idea.id, { status: 'reopen' });
-      if (reopened.queued) return archive.queuedText(reopened);
-    }
-    return `✓ #${idea.id} ${clip(idea.title, 60)} → ${verdict}`;
-  },
-
-  /** /ideas-sort */
-  async sort() {
-    const { headlessTriage } = await import('./claude.js');
-    const { headlessSummary } = await import('./mcp.js');
-    return headlessSummary(await headlessTriage());
-  },
-
-  /**
-   * /ideas-go [N]. New ideas are triaged first. Then a new window runs `ideamine go N`: Claude Code
-   * on the recommended model, in the project of the idea.
-   */
-  async go({ id }, { open }) {
-    const { goPlan, triageFirst } = await import('./claude.js');
-    const { headlessSummary } = await import('./mcp.js');
-    const lines = [];
-    try {
-      const triaged = await triageFirst({ id: id ?? null });
-      if (triaged) lines.push(headlessSummary(triaged));
-    } catch (e) {
-      lines.push(`Triage failed: ${e.message}`);
-    }
-    const db = await archive.fresh();
-    const idea = id != null ? store.findIdea(db, id) : store.pickNext(db);
-    if (!idea) throw new Error(id != null ? `no idea #${id}` : 'Nothing is ready to build. Triage the inbox first.');
-    const { model, dir } = goPlan(idea, os.homedir());
-    await open([BIN, 'go', String(idea.id)], dir);
-    await archive.update(idea.id, { status: 'doing' });
-    lines.push(`Opened Claude Code (${model}) in ${dir} for #${idea.id} · ${clip(idea.title, 60)}`);
-    return lines.join('\n\n');
-  },
-
-  /** /ideas <question> */
-  async ask({ question }) {
-    const q = String(question ?? '').trim();
-    if (!q) throw new Error('ask a question');
-    const { askAboutIdeas } = await import('./claude.js');
-    return (await askAboutIdeas(q)).answer || 'Claude gave no answer.';
-  },
-
-  /** /ideas-watch [off] */
-  watch({ on }) {
-    if (on) {
-      watch.turnOn();
-      watch.kick();
-    } else watch.turnOff();
-    return watch.status();
-  },
+  ...board.actions,
 };
-
-// These actions do not change the archive, so the dashboard server needs no new upload.
-const READ_ONLY = new Set(['ask', 'watch']);
 
 /** The reads and changes of the server role. Resolves to false for a route that it does not have. */
 async function serverRoute(req, res, route, query) {
@@ -399,7 +319,7 @@ async function handle(req, res, ctx) {
   try {
     const message = await ACTIONS[action](await readJson(req), ctx);
     ctx.log(`${action}: ok`);
-    if (!READ_ONLY.has(action)) {
+    if (!board.readOnly.has(action)) {
       try {
         ctx.afterChange();
       } catch {
@@ -419,7 +339,7 @@ async function handle(req, res, ctx) {
  * for each command.
  */
 export function createServer({ open = openWindow, afterChange = publish.kick, log = () => {} } = {}) {
-  const ctx = { open, afterChange, log, port: null };
+  const ctx = { open, afterChange, log, port: null, bin: BIN };
   ctx.server = http.createServer((req, res) => {
     handle(req, res, ctx).catch((e) => {
       if (!res.headersSent) send(res, 500, { ok: false, error: e.message });

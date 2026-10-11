@@ -19,3 +19,9 @@ test('the page loads nothing from the internet', () => {
   assert.doesNotMatch(page, /https?:\/\/(?!www\.w3\.org\/2000\/svg)/);
   assert.match(page, /Content-Security-Policy[^>]*default-src 'self'/);
 });
+
+test('a drop in Doing on a board with coop sends the update that ideaboard hands to a coop agent', () => {
+  const source = /function dropCommand[\s\S]*?\n}\n/.exec(page)[0];
+  const dropCommand = new Function('state', `${source}; return dropCommand;`)({ data: { live: { coop: true } } });
+  assert.deepEqual(dropCommand({ id: 7, lane: 'do' }, 'doing'), { action: 'update', body: { id: 7, status: 'doing', agent: 'any' } });
+});
