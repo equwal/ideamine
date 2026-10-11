@@ -7,8 +7,25 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/ideamine.js", "hook"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ideamine.js",
+              "hook"
+            ],
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/setup.js"
+            ],
+            "timeout": 120
           }
         ]
       }
